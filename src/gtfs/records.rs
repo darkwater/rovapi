@@ -1,0 +1,81 @@
+use serde::Deserialize;
+
+use super::time::{GtfsTime, deserialize_optional};
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Agency {
+    #[serde(default)]
+    pub agency_id: String,
+    pub agency_name: String,
+    pub agency_url: String,
+    pub agency_timezone: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Stop {
+    pub stop_id: String,
+    #[serde(default)]
+    pub stop_code: String,
+    #[serde(default)]
+    pub stop_name: String,
+    #[serde(default)]
+    pub stop_lat: Option<f64>,
+    #[serde(default)]
+    pub stop_lon: Option<f64>,
+    #[serde(default)]
+    pub location_type: Option<u8>,
+    #[serde(default)]
+    pub parent_station: String,
+    #[serde(default)]
+    pub platform_code: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Route {
+    pub route_id: String,
+    #[serde(default)]
+    pub agency_id: String,
+    #[serde(default)]
+    pub route_short_name: String,
+    #[serde(default)]
+    pub route_long_name: String,
+    pub route_type: u16,
+    #[serde(default)]
+    pub route_color: String,
+    #[serde(default)]
+    pub route_text_color: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Trip {
+    pub route_id: String,
+    pub service_id: String,
+    pub trip_id: String,
+    #[serde(default)]
+    pub trip_headsign: String,
+    #[serde(default)]
+    pub trip_short_name: String,
+    #[serde(default)]
+    pub direction_id: Option<u8>,
+    #[serde(default)]
+    pub shape_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct StopTime {
+    pub trip_id: String,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub arrival_time: Option<GtfsTime>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub departure_time: Option<GtfsTime>,
+    pub stop_id: String,
+    pub stop_sequence: u32,
+    #[serde(default)]
+    pub stop_headsign: String,
+    #[serde(default)]
+    pub pickup_type: Option<u8>,
+    #[serde(default)]
+    pub drop_off_type: Option<u8>,
+    #[serde(default)]
+    pub timepoint: Option<u8>,
+}
