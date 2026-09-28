@@ -273,6 +273,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nearby_stop_query_rejects_invalid_geography_before_schedule_access() {
+        for uri in [
+            "/v1/stops/nearby?lat=91&lon=5.12&radius=1000",
+            "/v1/stops/nearby?lat=52.09&lon=181&radius=1000",
+            "/v1/stops/nearby?lat=52.09&lon=5.12&radius=100001",
+        ] {
+            let response = router(AppState::new())
+                .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["error"]["code"], "bad_request");
+        }
+    }
+
+    #[tokio::test]
     async fn stop_search_uses_loaded_schedule() {
         let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(

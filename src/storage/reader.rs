@@ -4,6 +4,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -17,6 +18,7 @@ use super::{
 
 const DEFAULT_READER_COUNT: usize = 4;
 const COMMAND_CAPACITY_PER_READER: usize = 16;
+const QUERY_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Async handle to a pool of read-only SQLite connections on blocking workers.
 #[derive(Clone, Debug)]
@@ -26,9 +28,14 @@ pub struct SqliteReader {
 
 #[derive(Debug)]
 struct ReaderPool {
-    senders: Vec<mpsc::Sender<Command>>,
+    senders: Vec<mpsc::Sender<QueuedCommand>>,
     next: AtomicUsize,
     live_workers: Arc<AtomicUsize>,
+}
+
+struct QueuedCommand {
+    deadline: Instant,
+    command: Command,
 }
 
 enum Command {
@@ -87,6 +94,62 @@ enum Command {
     },
 }
 
+impl Command {
+    fn response_is_closed(&self) -> bool {
+        match self {
+            Self::Stop { response, .. } => response.is_closed(),
+            Self::SearchStops { response, .. } => response.is_closed(),
+            Self::NearbyStops { response, .. } => response.is_closed(),
+            Self::ScheduledDepartures { response, .. } => response.is_closed(),
+            Self::Route { response, .. } => response.is_closed(),
+            Self::SearchRoutes { response, .. } => response.is_closed(),
+            Self::RouteTrips { response, .. } => response.is_closed(),
+            Self::Trip { response, .. } => response.is_closed(),
+            Self::TripStops { response, .. } => response.is_closed(),
+            Self::TripShape { response, .. } => response.is_closed(),
+            Self::ScheduleMetadata { response } => response.is_closed(),
+        }
+    }
+
+    fn respond_timed_out(self) {
+        match self {
+            Self::Stop { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::SearchStops { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::NearbyStops { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::ScheduledDepartures { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::Route { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::SearchRoutes { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::RouteTrips { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::Trip { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::TripStops { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::TripShape { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::ScheduleMetadata { response } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+        }
+    }
+}
+
 struct LiveWorkerGuard(Arc<AtomicUsize>);
 
 impl LiveWorkerGuard {
@@ -139,7 +202,14 @@ impl SqliteReader {
                         return;
                     }
 
-                    while let Some(command) = receiver.blocking_recv() {
+                    while let Some(QueuedCommand { deadline, command }) = receiver.blocking_recv() {
+                        if command.response_is_closed() {
+                            continue;
+                        }
+                        if Instant::now() >= deadline {
+                            command.respond_timed_out();
+                            continue;
+                        }
                         match command {
                             Command::Stop {
                                 source_id,
@@ -250,24 +320,36 @@ impl SqliteReader {
             && self.pool.senders.iter().all(|sender| !sender.is_closed())
     }
 
-    fn sender(&self) -> &mpsc::Sender<Command> {
+    fn sender(&self) -> &mpsc::Sender<QueuedCommand> {
         let index = self.pool.next.fetch_add(1, Ordering::Relaxed) % self.pool.senders.len();
         &self.pool.senders[index]
+    }
+
+    async fn execute<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<T, StorageError>>) -> Command,
+    ) -> Result<T, StorageError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender()
+            .send(QueuedCommand {
+                deadline: Instant::now() + QUERY_QUEUE_TIMEOUT,
+                command: command(response),
+            })
+            .await
+            .map_err(|_| StorageError::WorkerStopped)?;
+        receiver.await.map_err(|_| StorageError::WorkerStopped)?
     }
 
     pub async fn stop(
         &self,
         source_id: impl Into<String>,
     ) -> Result<Option<StoredStop>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::Stop {
-                source_id: source_id.into(),
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let source_id = source_id.into();
+        self.execute(move |response| Command::Stop {
+            source_id,
+            response,
+        })
+        .await
     }
 
     pub async fn search_stops(
@@ -275,16 +357,13 @@ impl SqliteReader {
         query: impl Into<String>,
         limit: usize,
     ) -> Result<Vec<StoredStop>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::SearchStops {
-                query: query.into(),
-                limit,
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let query = query.into();
+        self.execute(move |response| Command::SearchStops {
+            query,
+            limit,
+            response,
+        })
+        .await
     }
 
     pub async fn nearby_stops(
@@ -294,18 +373,14 @@ impl SqliteReader {
         radius_metres: f64,
         limit: usize,
     ) -> Result<Vec<NearbyStop>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::NearbyStops {
-                latitude,
-                longitude,
-                radius_metres,
-                limit,
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        self.execute(move |response| Command::NearbyStops {
+            latitude,
+            longitude,
+            radius_metres,
+            limit,
+            response,
+        })
+        .await
     }
 
     pub async fn scheduled_departures(
@@ -315,33 +390,27 @@ impl SqliteReader {
         after: GtfsTime,
         limit: usize,
     ) -> Result<Vec<ScheduledDeparture>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::ScheduledDepartures {
-                stop_source_id: stop_source_id.into(),
-                date,
-                after,
-                limit,
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let stop_source_id = stop_source_id.into();
+        self.execute(move |response| Command::ScheduledDepartures {
+            stop_source_id,
+            date,
+            after,
+            limit,
+            response,
+        })
+        .await
     }
 
     pub async fn route(
         &self,
         source_id: impl Into<String>,
     ) -> Result<Option<StoredRoute>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::Route {
-                source_id: source_id.into(),
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let source_id = source_id.into();
+        self.execute(move |response| Command::Route {
+            source_id,
+            response,
+        })
+        .await
     }
 
     pub async fn search_routes(
@@ -349,16 +418,13 @@ impl SqliteReader {
         query: impl Into<String>,
         limit: usize,
     ) -> Result<Vec<StoredRoute>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::SearchRoutes {
-                query: query.into(),
-                limit,
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let query = query.into();
+        self.execute(move |response| Command::SearchRoutes {
+            query,
+            limit,
+            response,
+        })
+        .await
     }
 
     pub async fn route_trips(
@@ -367,71 +433,55 @@ impl SqliteReader {
         date: GtfsDate,
         limit: usize,
     ) -> Result<Vec<StoredTrip>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::RouteTrips {
-                route_source_id: route_source_id.into(),
-                date,
-                limit,
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let route_source_id = route_source_id.into();
+        self.execute(move |response| Command::RouteTrips {
+            route_source_id,
+            date,
+            limit,
+            response,
+        })
+        .await
     }
 
     pub async fn trip(
         &self,
         source_id: impl Into<String>,
     ) -> Result<Option<StoredTrip>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::Trip {
-                source_id: source_id.into(),
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let source_id = source_id.into();
+        self.execute(move |response| Command::Trip {
+            source_id,
+            response,
+        })
+        .await
     }
 
     pub async fn trip_stops(
         &self,
         trip_source_id: impl Into<String>,
     ) -> Result<Vec<ScheduledStopCall>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::TripStops {
-                trip_source_id: trip_source_id.into(),
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let trip_source_id = trip_source_id.into();
+        self.execute(move |response| Command::TripStops {
+            trip_source_id,
+            response,
+        })
+        .await
     }
 
     pub async fn trip_shape(
         &self,
         trip_source_id: impl Into<String>,
     ) -> Result<Vec<StoredShapePoint>, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::TripShape {
-                trip_source_id: trip_source_id.into(),
-                response,
-            })
-            .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+        let trip_source_id = trip_source_id.into();
+        self.execute(move |response| Command::TripShape {
+            trip_source_id,
+            response,
+        })
+        .await
     }
 
     pub async fn schedule_metadata(&self) -> Result<StoredScheduleMetadata, StorageError> {
-        let (response, receiver) = oneshot::channel();
-        self.sender()
-            .send(Command::ScheduleMetadata { response })
+        self.execute(|response| Command::ScheduleMetadata { response })
             .await
-            .map_err(|_| StorageError::WorkerStopped)?;
-        receiver.await.map_err(|_| StorageError::WorkerStopped)?
     }
 }
 

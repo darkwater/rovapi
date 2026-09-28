@@ -44,10 +44,18 @@ impl ApiError {
 
     pub fn storage(error: StorageError) -> Self {
         tracing::error!(error = %error, "schedule query failed");
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
-            message: "the schedule query failed".to_owned(),
+        match error {
+            StorageError::QueryTimedOut => Self {
+                status: StatusCode::GATEWAY_TIMEOUT,
+                code: "schedule_timeout",
+                message: "the schedule query timed out".to_owned(),
+            },
+            StorageError::WorkerStopped => Self::schedule_unavailable(),
+            _ => Self {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "internal_error",
+                message: "the schedule query failed".to_owned(),
+            },
         }
     }
 

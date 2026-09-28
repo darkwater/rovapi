@@ -187,6 +187,7 @@ pub enum StorageError {
         source_id: String,
     },
     Sqlite(rusqlite::Error),
+    QueryTimedOut,
     UnsupportedSchema {
         actual: u32,
         expected: u32,
@@ -1106,6 +1107,7 @@ impl fmt::Display for StorageError {
                 )
             }
             Self::InvalidRadius => write!(formatter, "radius must be between 0 and 100000 metres"),
+            Self::QueryTimedOut => write!(formatter, "SQLite query timed out while queued"),
             Self::Integrity(message) => {
                 write!(formatter, "SQLite integrity check failed: {message}")
             }

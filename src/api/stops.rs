@@ -72,6 +72,20 @@ pub(crate) async fn nearby_stops(
 ) -> Result<Json<Vec<NearbyStop>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;
     validate_limit(query.limit)?;
+    if !query.lat.is_finite()
+        || !query.lon.is_finite()
+        || !(-90.0..=90.0).contains(&query.lat)
+        || !(-180.0..=180.0).contains(&query.lon)
+    {
+        return Err(ApiError::bad_request(
+            "lat and lon must be finite WGS84 coordinates",
+        ));
+    }
+    if !query.radius.is_finite() || !(0.0..=100_000.0).contains(&query.radius) {
+        return Err(ApiError::bad_request(
+            "radius must be between 0 and 100000 metres",
+        ));
+    }
     let reader = state.schedule()?;
     let stops = reader
         .nearby_stops(query.lat, query.lon, query.radius, query.limit)
