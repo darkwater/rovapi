@@ -6,8 +6,9 @@ use std::{
 use axum::{Router, http::Request, routing::get};
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-    trace::TraceLayer,
+    trace::{DefaultOnResponse, TraceLayer},
 };
+use tracing::Level;
 
 use crate::{
     api::routes::{get_route, route_trips, search_routes},
@@ -90,19 +91,21 @@ pub fn router(state: AppState) -> Router {
         .with_state(Arc::new(state))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-                let request_id = request
-                    .headers()
-                    .get("x-request-id")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("invalid");
-                tracing::info_span!(
-                    "http_request",
-                    method = %request.method(),
-                    uri = %request.uri(),
-                    request_id,
-                )
-            }),
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    let request_id = request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("invalid");
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        request_id,
+                    )
+                })
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }

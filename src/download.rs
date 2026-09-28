@@ -69,6 +69,7 @@ impl FeedDownloader {
                     let _ = fs::remove_file(&temporary).await;
                     return Err(error.into());
                 }
+                sync_parent_directory(destination).await?;
                 Ok(DownloadOutcome::Downloaded(downloaded))
             }
             Ok(DownloadOutcome::NotModified) => {
@@ -135,6 +136,23 @@ impl FeedDownloader {
         }
         request
     }
+}
+
+#[cfg(unix)]
+async fn sync_parent_directory(path: &Path) -> Result<(), DownloadError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("download destination has no parent directory"))?
+        .to_owned();
+    tokio::task::spawn_blocking(move || std::fs::File::open(parent)?.sync_all())
+        .await
+        .map_err(std::io::Error::other)??;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_directory(_path: &Path) -> Result<(), DownloadError> {
+    Ok(())
 }
 
 async fn write_limited(
@@ -254,6 +272,7 @@ mod tests {
             .unwrap();
         let result = write_limited(&mut file, &mut bytes, 10, b"567890").await;
         assert!(matches!(result, Err(DownloadError::TooLarge { limit: 10 })));
+        file.flush().await.unwrap();
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"01234");
         let _ = tokio::fs::remove_file(path).await;
     }

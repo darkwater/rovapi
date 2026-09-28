@@ -3,7 +3,7 @@ use std::{
     fmt,
     io::{Read, Seek},
     path::Path,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
@@ -277,11 +277,30 @@ impl SqliteStore {
         &mut self,
         archive: &mut GtfsArchive<R>,
     ) -> Result<ImportSummary, StorageError> {
+        let started = Instant::now();
+        tracing::info!("validating GTFS archive");
         let validation = validate(archive)?;
         if !validation.is_valid() {
             return Err(StorageError::Validation(validation));
         }
-        self.import_validated_gtfs(archive)
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            stops = validation.counts.stops,
+            routes = validation.counts.routes,
+            trips = validation.counts.trips,
+            stop_times = validation.counts.stop_times,
+            "GTFS validation completed; persisting schedule"
+        );
+        let summary = self.import_validated_gtfs(archive)?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            stops = summary.stops,
+            routes = summary.routes,
+            trips = summary.trips,
+            stop_times = summary.stop_times,
+            "GTFS schedule persistence completed"
+        );
+        Ok(summary)
     }
 
     fn import_validated_gtfs<R: Read + Seek>(

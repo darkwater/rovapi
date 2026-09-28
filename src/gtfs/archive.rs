@@ -148,6 +148,15 @@ impl<R: Read + Seek> GtfsArchive<R> {
         self.visit_optional_file("feed_info.txt", visitor)
     }
 
+    pub(crate) fn file_has_records(&mut self, name: &str) -> Result<bool, GtfsError> {
+        if !self.files.contains(name) {
+            return Ok(false);
+        }
+        let file = self.archive.by_name(name)?;
+        let mut csv = csv::ReaderBuilder::new().flexible(true).from_reader(file);
+        Ok(csv.byte_records().next().transpose()?.is_some())
+    }
+
     fn visit_optional_file<T: DeserializeOwned, E: From<GtfsError>>(
         &mut self,
         name: &'static str,

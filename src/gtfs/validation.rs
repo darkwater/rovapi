@@ -60,6 +60,14 @@ pub fn validate<R: Read + Seek>(
     archive: &mut GtfsArchive<R>,
 ) -> Result<ValidationReport, GtfsError> {
     let mut report = ValidationReport::default();
+    if archive.file_has_records("frequencies.txt")? {
+        report.issue(
+            "unsupported_frequencies",
+            "frequencies.txt".to_owned(),
+            "frequency-based service is not supported; importing it would omit departures"
+                .to_owned(),
+        );
+    }
     report.counts.feed_info = archive.visit_feed_info(|feed| {
         if feed.feed_publisher_name.is_empty()
             || feed.feed_publisher_url.is_empty()
@@ -668,6 +676,15 @@ mod tests {
                 zip.start_file(name, SimpleFileOptions::default()).unwrap();
                 zip.write_all(contents.as_bytes()).unwrap();
             }
+            for (name, contents) in overrides {
+                if !defaults
+                    .iter()
+                    .any(|(default_name, _)| default_name == name)
+                {
+                    zip.start_file(*name, SimpleFileOptions::default()).unwrap();
+                    zip.write_all(contents.as_bytes()).unwrap();
+                }
+            }
             zip.finish().unwrap();
         }
         output.set_position(0);
@@ -798,6 +815,22 @@ mod tests {
         assert!(codes.contains("missing_route_name"));
         assert!(codes.contains("invalid_direction_id"));
         assert!(codes.contains("invalid_stop_time_enum"));
+    }
+
+    #[test]
+    fn rejects_frequency_based_service_instead_of_silently_omitting_it() {
+        let mut feed = archive(&[(
+            "frequencies.txt",
+            "trip_id,start_time,end_time,headway_secs\ntrip-1,06:00:00,10:00:00,600\n",
+        )]);
+
+        let report = validate(&mut feed).unwrap();
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "unsupported_frequencies")
+        );
     }
 
     #[test]
