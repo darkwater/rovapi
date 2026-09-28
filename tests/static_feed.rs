@@ -95,6 +95,9 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
         .unwrap();
     let app = router(AppState::with_schedule(reader));
 
+    let readiness = json(app.clone(), "/health/ready").await;
+    assert_eq!(readiness["checks"]["schedule"], "ok");
+
     let schedule = json(app.clone(), "/v1/schedule").await;
     assert_eq!(schedule["schedule_version"], "fixture-v1");
     assert_eq!(schedule["feed"]["source_version"], "fixture-2026-09");

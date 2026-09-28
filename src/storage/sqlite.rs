@@ -179,6 +179,7 @@ pub struct SqliteStore {
 pub enum StorageError {
     Gtfs(GtfsError),
     InvalidCoordinate,
+    InvalidReaderPoolSize,
     InvalidRadius,
     Integrity(String),
     InvalidReference {
@@ -1098,6 +1099,12 @@ impl fmt::Display for StorageError {
         match self {
             Self::Gtfs(error) => write!(formatter, "GTFS import error: {error}"),
             Self::InvalidCoordinate => write!(formatter, "invalid WGS84 coordinate pair"),
+            Self::InvalidReaderPoolSize => {
+                write!(
+                    formatter,
+                    "SQLite reader pool must contain at least one worker"
+                )
+            }
             Self::InvalidRadius => write!(formatter, "radius must be between 0 and 100000 metres"),
             Self::Integrity(message) => {
                 write!(formatter, "SQLite integrity check failed: {message}")

@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, PoisonError, RwLock},
     time::Instant,
 };
 
@@ -25,39 +22,44 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub(crate) started_at: Instant,
-    pub(crate) ready: Arc<AtomicBool>,
-    schedule: Option<SqliteReader>,
+    schedule: Arc<RwLock<Option<SqliteReader>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
-            ready: Arc::new(AtomicBool::new(false)),
-            schedule: None,
+            schedule: Arc::new(RwLock::new(None)),
         }
     }
 
     pub fn with_schedule(schedule: SqliteReader) -> Self {
         Self {
             started_at: Instant::now(),
-            ready: Arc::new(AtomicBool::new(true)),
-            schedule: Some(schedule),
+            schedule: Arc::new(RwLock::new(Some(schedule))),
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_ready(&self, ready: bool) {
-        self.ready.store(ready, Ordering::Release);
+    pub fn replace_schedule(&self, schedule: SqliteReader) -> Option<SqliteReader> {
+        self.schedule
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(schedule)
     }
 
     pub(crate) fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+        self.schedule
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(SqliteReader::is_healthy)
     }
 
-    pub(crate) fn schedule(&self) -> Result<&SqliteReader, crate::error::ApiError> {
+    pub(crate) fn schedule(&self) -> Result<SqliteReader, crate::error::ApiError> {
         self.schedule
-            .as_ref()
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
             .ok_or_else(crate::error::ApiError::schedule_unavailable)
     }
 }
@@ -209,18 +211,6 @@ mod tests {
             json["checks"],
             serde_json::json!({"schedule": "not_loaded"})
         );
-    }
-
-    #[tokio::test]
-    async fn readiness_can_be_enabled_after_schedule_load() {
-        let state = AppState::new();
-        state.set_ready(true);
-        let response = router(state)
-            .oneshot(Request::get("/health/ready").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
