@@ -10,6 +10,8 @@ pub struct FeedCounts {
     pub agencies: u64,
     pub stops: u64,
     pub routes: u64,
+    pub calendars: u64,
+    pub calendar_dates: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -135,6 +137,63 @@ pub fn validate<R: Read + Seek>(
         Ok::<_, GtfsError>(())
     })?;
 
+    let mut service_ids = HashSet::new();
+    report.counts.calendars = archive.visit_calendars(|calendar| {
+        if !service_ids.insert(calendar.service_id.clone()) {
+            report.issue(
+                "duplicate_calendar",
+                calendar.service_id.clone(),
+                "service_id occurs more than once in calendar.txt".to_owned(),
+            );
+        }
+        if [
+            calendar.monday,
+            calendar.tuesday,
+            calendar.wednesday,
+            calendar.thursday,
+            calendar.friday,
+            calendar.saturday,
+            calendar.sunday,
+        ]
+        .iter()
+        .any(|&value| value > 1)
+        {
+            report.issue(
+                "invalid_calendar_weekday",
+                calendar.service_id.clone(),
+                "weekday flags must be 0 or 1".to_owned(),
+            );
+        }
+        if calendar.start_date > calendar.end_date {
+            report.issue(
+                "invalid_calendar_range",
+                calendar.service_id,
+                "start_date must not be after end_date".to_owned(),
+            );
+        }
+        Ok::<_, GtfsError>(())
+    })?;
+
+    let mut calendar_date_keys = HashSet::new();
+    report.counts.calendar_dates = archive.visit_calendar_dates(|exception| {
+        service_ids.insert(exception.service_id.clone());
+        if !calendar_date_keys.insert((exception.service_id.clone(), exception.date)) {
+            report.issue(
+                "duplicate_calendar_date",
+                format!("{}:{}", exception.service_id, exception.date),
+                "service_id and date occur more than once in calendar_dates.txt".to_owned(),
+            );
+        }
+        if !matches!(exception.exception_type, 1 | 2) {
+            report.issue(
+                "invalid_exception_type",
+                format!("{}:{}", exception.service_id, exception.date),
+                "exception_type must be 1 (added) or 2 (removed)".to_owned(),
+            );
+        }
+        Ok::<_, GtfsError>(())
+    })?;
+
     let mut trip_ids = HashSet::new();
     report.counts.trips = archive.visit_trips(|trip| {
         if !trip_ids.insert(trip.trip_id.clone()) {
@@ -147,8 +206,15 @@ pub fn validate<R: Read + Seek>(
         if !route_ids.contains(&trip.route_id) {
             report.issue(
                 "unknown_route",
-                trip.trip_id,
+                trip.trip_id.clone(),
                 format!("route_id {:?} does not exist", trip.route_id),
+            );
+        }
+        if !service_ids.contains(&trip.service_id) {
+            report.issue(
+                "unknown_service",
+                trip.trip_id,
+                format!("service_id {:?} does not exist", trip.service_id),
             );
         }
         Ok::<_, GtfsError>(())
@@ -221,6 +287,7 @@ mod tests {
                 "calendar.txt",
                 "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
             ),
+            ("calendar_dates.txt", "service_id,date,exception_type\n"),
         ];
         let mut output = Cursor::new(Vec::new());
         {
@@ -246,6 +313,33 @@ mod tests {
         let report = validate(&mut archive(&[])).unwrap();
         assert!(report.is_valid());
         assert_eq!(report.counts.stop_times, 1);
+        assert_eq!(report.counts.calendars, 1);
+    }
+
+    #[test]
+    fn validates_calendars_and_service_references() {
+        let mut feed = archive(&[
+            (
+                "calendar.txt",
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,2,1,1,1,1,0,0,20261001,20260901\n",
+            ),
+            (
+                "calendar_dates.txt",
+                "service_id,date,exception_type\nweekday,20260928,3\nweekday,20260928,1\n",
+            ),
+            (
+                "trips.txt",
+                "route_id,service_id,trip_id\nroute-1,missing,trip-1\n",
+            ),
+        ]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("invalid_calendar_weekday"));
+        assert!(codes.contains("invalid_calendar_range"));
+        assert!(codes.contains("invalid_exception_type"));
+        assert!(codes.contains("duplicate_calendar_date"));
+        assert!(codes.contains("unknown_service"));
     }
 
     #[test]

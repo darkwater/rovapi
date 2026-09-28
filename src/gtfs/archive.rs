@@ -7,7 +7,7 @@ use std::{
 use serde::de::DeserializeOwned;
 use zip::ZipArchive;
 
-use super::{Agency, Route, Stop, StopTime, Trip};
+use super::{Agency, Calendar, CalendarDate, Route, Stop, StopTime, Trip};
 
 const REQUIRED_FILES: &[&str] = &[
     "agency.txt",
@@ -34,6 +34,7 @@ impl Default for ImportLimits {
 
 pub struct GtfsArchive<R> {
     archive: ZipArchive<R>,
+    files: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -50,8 +51,8 @@ pub enum GtfsError {
 impl<R: Read + Seek> GtfsArchive<R> {
     pub fn open(reader: R, limits: ImportLimits) -> Result<Self, GtfsError> {
         let mut archive = ZipArchive::new(reader)?;
-        validate_archive(&mut archive, limits)?;
-        Ok(Self { archive })
+        let files = validate_archive(&mut archive, limits)?;
+        Ok(Self { archive, files })
     }
 
     pub fn visit_agencies<E>(
@@ -95,6 +96,38 @@ impl<R: Read + Seek> GtfsArchive<R> {
         self.visit_file("stop_times.txt", visitor)
     }
 
+    pub fn visit_calendars<E>(
+        &mut self,
+        visitor: impl FnMut(Calendar) -> Result<(), E>,
+    ) -> Result<u64, E>
+    where
+        E: From<GtfsError>,
+    {
+        self.visit_optional_file("calendar.txt", visitor)
+    }
+
+    pub fn visit_calendar_dates<E>(
+        &mut self,
+        visitor: impl FnMut(CalendarDate) -> Result<(), E>,
+    ) -> Result<u64, E>
+    where
+        E: From<GtfsError>,
+    {
+        self.visit_optional_file("calendar_dates.txt", visitor)
+    }
+
+    fn visit_optional_file<T: DeserializeOwned, E: From<GtfsError>>(
+        &mut self,
+        name: &'static str,
+        visitor: impl FnMut(T) -> Result<(), E>,
+    ) -> Result<u64, E> {
+        if self.files.contains(name) {
+            self.visit_file(name, visitor)
+        } else {
+            Ok(0)
+        }
+    }
+
     fn visit_file<T: DeserializeOwned, E: From<GtfsError>>(
         &mut self,
         name: &'static str,
@@ -119,7 +152,7 @@ impl<R: Read + Seek> GtfsArchive<R> {
 fn validate_archive<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     limits: ImportLimits,
-) -> Result<(), GtfsError> {
+) -> Result<HashSet<String>, GtfsError> {
     if archive.len() > limits.max_files {
         return Err(GtfsError::LimitExceeded("file count"));
     }
@@ -154,7 +187,7 @@ fn validate_archive<R: Read + Seek>(
     if !names.contains("calendar.txt") && !names.contains("calendar_dates.txt") {
         return Err(GtfsError::MissingFile("calendar.txt or calendar_dates.txt"));
     }
-    Ok(())
+    Ok(names)
 }
 
 impl fmt::Display for GtfsError {

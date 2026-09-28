@@ -13,7 +13,7 @@ use tower_http::{
 };
 
 use crate::{
-    api::stops::{get_stop, nearby_stops, search_stops},
+    api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
     storage::SqliteReader,
@@ -71,6 +71,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .route("/v1/stops", get(search_stops))
         .route("/v1/stops/nearby", get(nearby_stops))
+        .route("/v1/stops/:id/departures", get(scheduled_departures))
         .route("/v1/stops/:id", get(get_stop))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -98,6 +99,7 @@ pub fn router(state: AppState) -> Router {
 mod tests {
     use std::{
         fs,
+        io::{Cursor, Write},
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -108,11 +110,57 @@ mod tests {
     use http_body_util::BodyExt;
     use serde_json::Value;
     use tower::ServiceExt;
+    use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::*;
-    use crate::storage::{SqliteStore, StopInput};
+    use crate::{
+        gtfs::{GtfsArchive, ImportLimits},
+        storage::{SqliteStore, StopInput},
+    };
 
     static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn minimal_gtfs() -> GtfsArchive<Cursor<Vec<u8>>> {
+        let files = [
+            (
+                "agency.txt",
+                "agency_id,agency_name,agency_url,agency_timezone\nNL,Example,https://example.nl,Europe/Amsterdam\n",
+            ),
+            (
+                "stops.txt",
+                "stop_id,stop_code,stop_name,stop_lat,stop_lon\nstop-1,UT,Utrecht Centraal,52.0907,5.1214\n",
+            ),
+            (
+                "routes.txt",
+                "route_id,agency_id,route_short_name,route_type\nroute-1,NL,8,3\n",
+            ),
+            (
+                "trips.txt",
+                "route_id,service_id,trip_id,trip_headsign\nroute-1,weekday,trip-1,Science Park\n",
+            ),
+            (
+                "stop_times.txt",
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip-1,25:10:00,25:11:00,stop-1,1\n",
+            ),
+            (
+                "calendar.txt",
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
+            ),
+        ];
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut output);
+            for (name, contents) in files {
+                writer
+                    .start_file(name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(contents.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        output.set_position(0);
+        GtfsArchive::open(output, ImportLimits::default()).unwrap()
+    }
 
     #[tokio::test]
     async fn liveness_endpoint_reports_ok() {
@@ -251,6 +299,36 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json[0]["source_id"], "ut-centraal");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn scheduled_departure_endpoint_uses_service_date_and_gtfs_time() {
+        let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ovapi-departures-{}-{sequence}.sqlite",
+            std::process::id()
+        ));
+        let mut store = SqliteStore::create(&path).unwrap();
+        store.import_gtfs(&mut minimal_gtfs()).unwrap();
+        store.prepare_for_activation().unwrap();
+        let reader = SqliteReader::open(&path).await.unwrap();
+
+        let response = router(AppState::with_schedule(reader))
+            .oneshot(
+                Request::get("/v1/stops/stop-1/departures?date=2026-09-28&after=25:00:00&limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json[0]["trip_id"], "trip-1");
+        assert_eq!(json[0]["service_date"], "2026-09-28");
+        assert_eq!(json[0]["scheduled_departure"], "25:11:00");
 
         let _ = fs::remove_file(path);
     }

@@ -1,6 +1,9 @@
 use serde::Deserialize;
 
-use super::time::{GtfsTime, deserialize_optional};
+use super::{
+    GtfsDate,
+    time::{GtfsTime, deserialize_optional},
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Agency {
@@ -78,4 +81,25 @@ pub struct StopTime {
     pub drop_off_type: Option<u8>,
     #[serde(default)]
     pub timepoint: Option<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Calendar {
+    pub service_id: String,
+    pub monday: u8,
+    pub tuesday: u8,
+    pub wednesday: u8,
+    pub thursday: u8,
+    pub friday: u8,
+    pub saturday: u8,
+    pub sunday: u8,
+    pub start_date: GtfsDate,
+    pub end_date: GtfsDate,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CalendarDate {
+    pub service_id: String,
+    pub date: GtfsDate,
+    pub exception_type: u8,
 }

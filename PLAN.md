@@ -212,15 +212,18 @@ headers. Geographic vehicle queries require a bounded viewport.
 - [ ] Feed downloader with conditional requests and size limits
 - [x] Streaming ZIP/CSV reader with archive limits and core typed records
 - [x] Cross-record validation report for core identity/reference invariants
-- [ ] Calendar, shape, transfer, and parent-station validation
+- [x] Calendar and calendar-exception validation
+- [ ] Shape, transfer, and parent-station validation
 - [x] Core SQLite schema, including internal IDs, FTS5, and R-tree indexes
-- [ ] Calendar, shape, transfer, and feed-version schema
+- [x] Calendar and calendar-exception schema
+- [ ] Shape, transfer, and feed-version schema
 - [x] Atomic core GTFS-to-SQLite import transaction
 - [x] Mandatory validation before import and prepared bulk inserts
 - [x] Integrity check, WAL checkpoint, and schema check before activation
 - [x] Versioned database-file installation, validation, and atomic activation
 - [x] Stop lookup, search, and nearby-stop API endpoints
-- [ ] Routes, trips, and scheduled departure API endpoints
+- [x] Calendar-aware scheduled departure API endpoint
+- [ ] Route and trip API endpoints
 - [ ] Representative fixtures and integration tests
 
 ### M2 — realtime MVP

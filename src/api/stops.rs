@@ -9,7 +9,8 @@ use serde::Deserialize;
 use crate::{
     AppState,
     error::ApiError,
-    storage::{NearbyStop, StoredStop},
+    gtfs::{GtfsDate, GtfsTime},
+    storage::{NearbyStop, ScheduledDeparture, StoredStop},
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +25,14 @@ pub(crate) struct NearbyQuery {
     lat: f64,
     lon: f64,
     radius: f64,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct DeparturesQuery {
+    date: String,
+    after: String,
     #[serde(default = "default_limit")]
     limit: usize,
 }
@@ -71,6 +80,36 @@ pub(crate) async fn nearby_stops(
         .await
         .map_err(ApiError::storage)?;
     Ok(Json(stops))
+}
+
+pub(crate) async fn scheduled_departures(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+    query: Result<Query<DeparturesQuery>, QueryRejection>,
+) -> Result<Json<Vec<ScheduledDeparture>>, ApiError> {
+    let Query(query) = query.map_err(ApiError::query)?;
+    validate_limit(query.limit)?;
+    let date = GtfsDate::parse_iso(&query.date)
+        .map_err(|_| ApiError::bad_request("date must use YYYY-MM-DD"))?;
+    let after: GtfsTime = query
+        .after
+        .parse()
+        .map_err(|_| ApiError::bad_request("after must use HH:MM:SS (hours may exceed 23)"))?;
+
+    let reader = state.schedule()?;
+    if reader
+        .stop(source_id.clone())
+        .await
+        .map_err(ApiError::storage)?
+        .is_none()
+    {
+        return Err(ApiError::not_found("stop does not exist"));
+    }
+    let departures = reader
+        .scheduled_departures(source_id, date, after, query.limit)
+        .await
+        .map_err(ApiError::storage)?;
+    Ok(Json(departures))
 }
 
 fn validate_limit(limit: usize) -> Result<(), ApiError> {

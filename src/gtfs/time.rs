@@ -10,6 +10,10 @@ use serde::{Deserialize, Deserializer};
 pub struct GtfsTime(u32);
 
 impl GtfsTime {
+    pub const fn from_seconds(seconds: u32) -> Self {
+        Self(seconds)
+    }
+
     pub const fn seconds_since_service_day_start(self) -> u32 {
         self.0
     }

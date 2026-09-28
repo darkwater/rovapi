@@ -9,10 +9,11 @@ use std::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
 use serde::Serialize;
 
-use crate::gtfs::{GtfsArchive, GtfsError, Stop, ValidationReport, validate};
+use crate::gtfs::{GtfsArchive, GtfsDate, GtfsError, GtfsTime, Stop, ValidationReport, validate};
 
 const SCHEMA: &str = include_str!("../../migrations/0001_schedule.sql");
-const SCHEMA_VERSION: u32 = 1;
+const CALENDAR_SCHEMA: &str = include_str!("../../migrations/0002_calendar.sql");
+const SCHEMA_VERSION: u32 = 2;
 const EARTH_RADIUS_METRES: f64 = 6_371_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,11 +46,26 @@ pub struct NearbyStop {
     pub distance_metres: f64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ScheduledDeparture {
+    pub trip_id: String,
+    pub route_id: String,
+    pub route_short_name: Option<String>,
+    pub route_long_name: Option<String>,
+    pub headsign: Option<String>,
+    pub stop_sequence: u32,
+    pub service_date: GtfsDate,
+    pub scheduled_departure: String,
+    pub scheduled_departure_seconds: u32,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ImportSummary {
     pub agencies: u64,
     pub stops: u64,
     pub routes: u64,
+    pub calendars: u64,
+    pub calendar_dates: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -64,6 +80,13 @@ pub trait StopRepository {
         radius_metres: f64,
         limit: usize,
     ) -> Result<Vec<NearbyStop>, StorageError>;
+    fn scheduled_departures(
+        &self,
+        stop_source_id: &str,
+        date: GtfsDate,
+        after: GtfsTime,
+        limit: usize,
+    ) -> Result<Vec<ScheduledDeparture>, StorageError>;
 }
 
 pub struct SqliteStore {
@@ -99,6 +122,7 @@ impl SqliteStore {
         let store = Self { connection };
         store.configure(true)?;
         store.connection.execute_batch(SCHEMA)?;
+        store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -109,6 +133,7 @@ impl SqliteStore {
         };
         store.configure(false)?;
         store.connection.execute_batch(SCHEMA)?;
+        store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -229,6 +254,43 @@ impl SqliteStore {
         })?;
         drop(route_statement);
 
+        let mut calendar_statement = transaction.prepare(
+            "INSERT INTO service_calendars(
+                service_source_id, monday, tuesday, wednesday, thursday,
+                friday, saturday, sunday, start_date, end_date
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )?;
+        let calendars = archive.visit_calendars(|calendar| {
+            calendar_statement.execute(params![
+                calendar.service_id,
+                calendar.monday,
+                calendar.tuesday,
+                calendar.wednesday,
+                calendar.thursday,
+                calendar.friday,
+                calendar.saturday,
+                calendar.sunday,
+                calendar.start_date.compact(),
+                calendar.end_date.compact(),
+            ])?;
+            Ok::<_, StorageError>(())
+        })?;
+        drop(calendar_statement);
+
+        let mut calendar_date_statement = transaction.prepare(
+            "INSERT INTO service_exceptions(service_source_id, date, exception_type)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        let calendar_dates = archive.visit_calendar_dates(|exception| {
+            calendar_date_statement.execute(params![
+                exception.service_id,
+                exception.date.compact(),
+                exception.exception_type,
+            ])?;
+            Ok::<_, StorageError>(())
+        })?;
+        drop(calendar_date_statement);
+
         let mut trip_ids = HashMap::new();
         let mut trip_statement = transaction.prepare(
             "INSERT INTO trips(
@@ -286,6 +348,8 @@ impl SqliteStore {
             agencies,
             stops,
             routes,
+            calendars,
+            calendar_dates,
             trips,
             stop_times,
         })
@@ -413,6 +477,81 @@ impl StopRepository for SqliteStore {
         nearby.sort_by(|left, right| left.distance_metres.total_cmp(&right.distance_metres));
         nearby.truncate(bounded_limit(limit) as usize);
         Ok(nearby)
+    }
+
+    fn scheduled_departures(
+        &self,
+        stop_source_id: &str,
+        date: GtfsDate,
+        after: GtfsTime,
+        limit: usize,
+    ) -> Result<Vec<ScheduledDeparture>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT t.source_id, r.source_id, r.short_name, r.long_name,
+                    COALESCE(st.stop_headsign, t.headsign), st.stop_sequence,
+                    st.departure_service_seconds
+             FROM stops AS s
+             JOIN stop_times AS st ON st.stop_id = s.id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE s.source_id = ?1
+               AND st.departure_service_seconds IS NOT NULL
+               AND st.departure_service_seconds >= ?3
+               AND (
+                   EXISTS (
+                       SELECT 1 FROM service_exceptions AS added
+                       WHERE added.service_source_id = t.service_source_id
+                         AND added.date = ?2 AND added.exception_type = 1
+                   )
+                   OR (
+                       EXISTS (
+                           SELECT 1 FROM service_calendars AS calendar
+                           WHERE calendar.service_source_id = t.service_source_id
+                             AND ?2 BETWEEN calendar.start_date AND calendar.end_date
+                             AND CASE ?4
+                                 WHEN 0 THEN calendar.sunday
+                                 WHEN 1 THEN calendar.monday
+                                 WHEN 2 THEN calendar.tuesday
+                                 WHEN 3 THEN calendar.wednesday
+                                 WHEN 4 THEN calendar.thursday
+                                 WHEN 5 THEN calendar.friday
+                                 WHEN 6 THEN calendar.saturday
+                             END = 1
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM service_exceptions AS removed
+                           WHERE removed.service_source_id = t.service_source_id
+                             AND removed.date = ?2 AND removed.exception_type = 2
+                       )
+                   )
+               )
+             ORDER BY st.departure_service_seconds, t.source_id
+             LIMIT ?5",
+        )?;
+        let rows = statement.query_map(
+            params![
+                stop_source_id,
+                date.compact(),
+                after.seconds_since_service_day_start(),
+                date.weekday() as u8,
+                bounded_limit(limit),
+            ],
+            |row| {
+                let seconds = row.get(6)?;
+                Ok(ScheduledDeparture {
+                    trip_id: row.get(0)?,
+                    route_id: row.get(1)?,
+                    route_short_name: row.get(2)?,
+                    route_long_name: row.get(3)?,
+                    headsign: row.get(4)?,
+                    stop_sequence: row.get(5)?,
+                    service_date: date,
+                    scheduled_departure: GtfsTime::from_seconds(seconds).to_string(),
+                    scheduled_departure_seconds: seconds,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
 
@@ -674,6 +813,7 @@ mod tests {
             "calendar.txt",
             "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
         ),
+        ("calendar_dates.txt", "service_id,date,exception_type\n"),
     ];
 
     fn gtfs_archive(overrides: &[(&str, &str)]) -> GtfsArchive<Cursor<Vec<u8>>> {
@@ -712,7 +852,7 @@ mod tests {
     #[test]
     fn bundled_sqlite_supports_schema_fts_and_rtree() {
         let mut store = SqliteStore::create_in_memory().unwrap();
-        assert_eq!(store.schema_version().unwrap(), 1);
+        assert_eq!(store.schema_version().unwrap(), 2);
         store
             .insert_stop(stop("ut-centraal", "Utrecht Centraal", 52.0893, 5.1103))
             .unwrap();
@@ -767,6 +907,8 @@ mod tests {
                 agencies: 1,
                 stops: 1,
                 routes: 1,
+                calendars: 1,
+                calendar_dates: 0,
                 trips: 1,
                 stop_times: 1,
             }
@@ -781,6 +923,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(departure, 90_660);
+    }
+
+    #[test]
+    fn scheduled_departures_apply_calendar_ranges_weekdays_and_exceptions() {
+        let mut store = SqliteStore::create_in_memory().unwrap();
+        store
+            .import_gtfs(&mut gtfs_archive(&[
+                (
+                    "calendar.txt",
+                    "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,0,0,0,0,0,0,20260901,20260930\n",
+                ),
+                (
+                    "calendar_dates.txt",
+                    "service_id,date,exception_type\nweekday,20260928,2\nweekday,20260929,1\n",
+                ),
+            ]))
+            .unwrap();
+
+        let removed_monday = store
+            .scheduled_departures(
+                "stop-1",
+                GtfsDate::parse_iso("2026-09-28").unwrap(),
+                "00:00:00".parse().unwrap(),
+                20,
+            )
+            .unwrap();
+        assert!(removed_monday.is_empty());
+
+        let added_tuesday = store
+            .scheduled_departures(
+                "stop-1",
+                GtfsDate::parse_iso("2026-09-29").unwrap(),
+                "25:00:00".parse().unwrap(),
+                20,
+            )
+            .unwrap();
+        assert_eq!(added_tuesday.len(), 1);
+        assert_eq!(added_tuesday[0].scheduled_departure, "25:11:00");
+        assert_eq!(added_tuesday[0].route_short_name.as_deref(), Some("8"));
+
+        let after_departure = store
+            .scheduled_departures(
+                "stop-1",
+                GtfsDate::parse_iso("2026-09-29").unwrap(),
+                "25:12:00".parse().unwrap(),
+                20,
+            )
+            .unwrap();
+        assert!(after_departure.is_empty());
     }
 
     #[test]
@@ -842,7 +1033,7 @@ mod tests {
             SqliteStore::open_read_only(database.path()),
             Err(StorageError::UnsupportedSchema {
                 actual: 999,
-                expected: 1
+                expected: 2
             })
         ));
     }

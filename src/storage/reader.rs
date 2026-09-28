@@ -2,7 +2,11 @@ use std::path::{Path, PathBuf};
 
 use tokio::sync::{mpsc, oneshot};
 
-use super::{NearbyStop, SqliteStore, StopRepository, StorageError, StoredStop};
+use crate::gtfs::{GtfsDate, GtfsTime};
+
+use super::{
+    NearbyStop, ScheduledDeparture, SqliteStore, StopRepository, StorageError, StoredStop,
+};
 
 const COMMAND_CAPACITY: usize = 64;
 
@@ -28,6 +32,13 @@ enum Command {
         radius_metres: f64,
         limit: usize,
         response: oneshot::Sender<Result<Vec<NearbyStop>, StorageError>>,
+    },
+    ScheduledDepartures {
+        stop_source_id: String,
+        date: GtfsDate,
+        after: GtfsTime,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<ScheduledDeparture>, StorageError>>,
     },
 }
 
@@ -77,6 +88,20 @@ impl SqliteReader {
                                 latitude,
                                 longitude,
                                 radius_metres,
+                                limit,
+                            ));
+                        }
+                        Command::ScheduledDepartures {
+                            stop_source_id,
+                            date,
+                            after,
+                            limit,
+                            response,
+                        } => {
+                            let _ = response.send(store.scheduled_departures(
+                                &stop_source_id,
+                                date,
+                                after,
                                 limit,
                             ));
                         }
@@ -136,6 +161,27 @@ impl SqliteReader {
                 latitude,
                 longitude,
                 radius_metres,
+                limit,
+                response,
+            })
+            .await
+            .map_err(|_| StorageError::WorkerStopped)?;
+        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+    }
+
+    pub async fn scheduled_departures(
+        &self,
+        stop_source_id: impl Into<String>,
+        date: GtfsDate,
+        after: GtfsTime,
+        limit: usize,
+    ) -> Result<Vec<ScheduledDeparture>, StorageError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::ScheduledDepartures {
+                stop_source_id: stop_source_id.into(),
+                date,
+                after,
                 limit,
                 response,
             })

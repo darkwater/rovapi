@@ -33,13 +33,19 @@ Endpoints currently available:
 - `GET /v1/stops?query=utrecht&limit=20`
 - `GET /v1/stops/nearby?lat=52.09&lon=5.12&radius=1000&limit=20`
 - `GET /v1/stops/{source_id}`
+- `GET /v1/stops/{source_id}/departures?date=2026-09-28&after=25:00:00&limit=20`
+
+Departure queries use the GTFS service date and service-day time. Hours may
+exceed 23, so a `25:11:00` departure belongs to the requested service date even
+though it occurs at 01:11 on the following civil day. Calendar additions and
+removals from `calendar_dates.txt` are applied.
 
 Readiness returns HTTP 503 until a validated schedule database has been loaded;
 liveness continues to report whether the process itself is running.
 
-The GTFS and SQLite modules are currently library-level building blocks. Public
-transit endpoints will be enabled after atomic feed import and activation are in
-place, so the API never exposes a partially imported timetable.
+Schedule databases are validated and imported transactionally, then installed
+and activated as immutable versioned files. The API therefore never exposes a
+partially imported timetable.
 
 The current importer intentionally supports the conventional fixed-stop GTFS
 profile used for scheduled Dutch transit. It requires `agency.txt`, `stops.txt`,
