@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State, rejection::QueryRejection},
 };
-use serde::Deserialize;
+use ovapi_models::{DeparturesQuery, NearbyStopsQuery, StopSearchQuery};
 
 use crate::{
     AppState,
@@ -13,31 +13,7 @@ use crate::{
     storage::{NearbyStop, ScheduledDeparture, StoredStop},
 };
 
-use super::{default_limit, parse_service_date, validate_limit};
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct SearchQuery {
-    query: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct NearbyQuery {
-    lat: f64,
-    lon: f64,
-    radius: f64,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct DeparturesQuery {
-    date: String,
-    after: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
+use super::{parse_service_date, validate_limit};
 
 pub(crate) async fn get_stop(
     State(state): State<Arc<AppState>>,
@@ -54,7 +30,7 @@ pub(crate) async fn get_stop(
 
 pub(crate) async fn search_stops(
     State(state): State<Arc<AppState>>,
-    query: Result<Query<SearchQuery>, QueryRejection>,
+    query: Result<Query<StopSearchQuery>, QueryRejection>,
 ) -> Result<Json<Vec<StoredStop>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;
     validate_limit(query.limit)?;
@@ -68,7 +44,7 @@ pub(crate) async fn search_stops(
 
 pub(crate) async fn nearby_stops(
     State(state): State<Arc<AppState>>,
-    query: Result<Query<NearbyQuery>, QueryRejection>,
+    query: Result<Query<NearbyStopsQuery>, QueryRejection>,
 ) -> Result<Json<Vec<NearbyStop>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;
     validate_limit(query.limit)?;

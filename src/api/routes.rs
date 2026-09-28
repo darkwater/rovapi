@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State, rejection::QueryRejection},
 };
-use serde::Deserialize;
+use ovapi_models::{RouteSearchQuery, RouteTripsQuery};
 
 use crate::{
     AppState,
@@ -12,21 +12,7 @@ use crate::{
     storage::{StoredRoute, StoredTrip},
 };
 
-use super::{default_limit, parse_service_date, validate_limit};
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct RouteTripsQuery {
-    date: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct RouteSearchQuery {
-    query: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
+use super::{parse_service_date, validate_limit};
 
 pub(crate) async fn search_routes(
     State(state): State<Arc<AppState>>,

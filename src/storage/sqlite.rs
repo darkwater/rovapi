@@ -6,8 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ovapi_models::{
+    FeedInfo as StoredFeedInfo, NearbyStop, Route as StoredRoute,
+    ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall,
+    ShapePoint as StoredShapePoint, Stop as StoredStop, Trip as StoredTrip,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
-use serde::Serialize;
 
 use crate::gtfs::{GtfsArchive, GtfsDate, GtfsError, GtfsTime, Stop, ValidationReport, validate};
 
@@ -29,104 +33,6 @@ pub struct StopInput<'a> {
     pub location_type: Option<u8>,
     pub parent_source_id: Option<&'a str>,
     pub platform_code: Option<&'a str>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct StoredStop {
-    pub source_id: String,
-    pub code: Option<String>,
-    pub name: String,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-    pub location_type: Option<u8>,
-    pub parent_source_id: Option<String>,
-    pub platform_code: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct NearbyStop {
-    pub stop: StoredStop,
-    pub distance_metres: f64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ScheduledDeparture {
-    pub trip_id: String,
-    pub route_id: String,
-    pub route_short_name: Option<String>,
-    pub route_long_name: Option<String>,
-    pub headsign: Option<String>,
-    pub stop_sequence: u32,
-    pub service_date: GtfsDate,
-    pub scheduled_departure: String,
-    pub scheduled_departure_seconds: u32,
-    pub pickup_type: u8,
-    pub drop_off_type: u8,
-    pub timepoint: u8,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StoredRoute {
-    pub source_id: String,
-    pub agency_source_id: Option<String>,
-    pub short_name: Option<String>,
-    pub long_name: Option<String>,
-    pub route_type: u16,
-    pub color: Option<String>,
-    pub text_color: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StoredTrip {
-    pub source_id: String,
-    pub route_id: String,
-    pub service_id: String,
-    pub headsign: Option<String>,
-    pub short_name: Option<String>,
-    pub direction_id: Option<u8>,
-    pub shape_id: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct ScheduledStopCall {
-    pub stop: StoredStop,
-    pub stop_sequence: u32,
-    pub scheduled_arrival: Option<String>,
-    pub scheduled_arrival_seconds: Option<u32>,
-    pub scheduled_departure: Option<String>,
-    pub scheduled_departure_seconds: Option<u32>,
-    pub headsign: Option<String>,
-    pub pickup_type: Option<u8>,
-    pub drop_off_type: Option<u8>,
-    pub timepoint: Option<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct StoredShapePoint {
-    pub sequence: u32,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub distance_traveled: Option<f64>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StoredFeedInfo {
-    pub publisher_name: String,
-    pub publisher_url: String,
-    pub feed_lang: String,
-    pub default_lang: Option<String>,
-    pub start_date: Option<String>,
-    pub end_date: Option<String>,
-    pub source_version: Option<String>,
-    pub contact_email: Option<String>,
-    pub contact_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StoredScheduleMetadata {
-    pub schedule_version: Option<String>,
-    pub imported_at_unix: Option<u64>,
-    pub feed: Option<StoredFeedInfo>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -734,7 +640,7 @@ impl ScheduleRepository for SqliteStore {
                     route_long_name: row.get(3)?,
                     headsign: row.get(4)?,
                     stop_sequence: row.get(5)?,
-                    service_date: date,
+                    service_date: date.to_string(),
                     scheduled_departure: GtfsTime::from_seconds(seconds).to_string(),
                     scheduled_departure_seconds: seconds,
                     pickup_type: row.get(7)?,
@@ -1312,7 +1218,7 @@ mod tests {
 
         let nearby = store.nearby_stops(52.09, 5.11, 2_000.0, 10).unwrap();
         assert_eq!(nearby.len(), 2);
-        assert_eq!(nearby[0].source_id(), "ut-centraal");
+        assert_eq!(nearby[0].stop.source_id, "ut-centraal");
         assert!(nearby[0].distance_metres < nearby[1].distance_metres);
     }
 
@@ -1554,11 +1460,5 @@ mod tests {
                 expected: 5
             })
         ));
-    }
-
-    impl NearbyStop {
-        fn source_id(&self) -> &str {
-            &self.stop.source_id
-        }
     }
 }

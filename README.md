@@ -102,6 +102,26 @@ language, and advertised date range.
 Readiness returns HTTP 503 until a validated schedule database has been loaded;
 liveness continues to report whether the process itself is running.
 
+## Rust API models
+
+The workspace contains the transport-independent `ovapi-models` crate. It is
+the source of truth for the server's JSON response bodies and query parameters,
+and provides both `Serialize` and `Deserialize` implementations without
+depending on Axum, Tokio, or a particular HTTP client.
+
+```toml
+[dependencies]
+ovapi-models = { path = "../ovapi/crates/ovapi-models" }
+```
+
+```rust
+let departures: Vec<ovapi_models::ScheduledDeparture> =
+    serde_json::from_slice(response_body)?;
+```
+
+The server crate also re-exports it as `ovapi::models` for applications which
+already depend on the full service package.
+
 Schedule databases are validated and imported transactionally, then installed
 and activated as immutable versioned files. The API therefore never exposes a
 partially imported timetable.

@@ -10,3 +10,4 @@ pub mod storage;
 
 pub use app::{AppState, router};
 pub use config::{Config, ConfigError};
+pub use ovapi_models as models;

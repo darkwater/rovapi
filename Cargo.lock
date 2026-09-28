@@ -813,6 +813,7 @@ dependencies = [
  "axum",
  "csv",
  "http-body-util",
+ "ovapi-models",
  "reqwest",
  "rusqlite",
  "serde",
@@ -823,6 +824,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zip",
+]
+
+[[package]]
+name = "ovapi-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

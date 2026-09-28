@@ -17,7 +17,10 @@ use ovapi::{
     schedule::{DataDirectory, ScheduleVersion},
     storage::SqliteReader,
 };
-use serde_json::Value;
+use ovapi_models::{
+    ReadyResponse, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
+};
+use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -64,7 +67,7 @@ fn fixture_zip(directory: &Path) -> Cursor<Vec<u8>> {
     output
 }
 
-async fn json(app: axum::Router, uri: &str) -> Value {
+async fn json<T: DeserializeOwned>(app: axum::Router, uri: &str) -> T {
     let response = app
         .oneshot(Request::get(uri).body(Body::empty()).unwrap())
         .await
@@ -95,30 +98,33 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
         .unwrap();
     let app = router(AppState::with_schedule(reader));
 
-    let readiness = json(app.clone(), "/health/ready").await;
-    assert_eq!(readiness["checks"]["schedule"], "ok");
+    let readiness: ReadyResponse = json(app.clone(), "/health/ready").await;
+    assert_eq!(readiness.checks["schedule"], "ok");
 
-    let schedule = json(app.clone(), "/v1/schedule").await;
-    assert_eq!(schedule["schedule_version"], "fixture-v1");
-    assert_eq!(schedule["feed"]["source_version"], "fixture-2026-09");
+    let schedule: ScheduleMetadata = json(app.clone(), "/v1/schedule").await;
+    assert_eq!(schedule.schedule_version.as_deref(), Some("fixture-v1"));
+    assert_eq!(
+        schedule.feed.unwrap().source_version.as_deref(),
+        Some("fixture-2026-09")
+    );
 
-    let removed = json(
+    let removed: Vec<ScheduledDeparture> = json(
         app.clone(),
         "/v1/stops/platform-a/departures?date=2026-09-28&after=00:00:00",
     )
     .await;
-    assert!(removed.as_array().unwrap().is_empty());
+    assert!(removed.is_empty());
 
-    let added = json(
+    let added: Vec<ScheduledDeparture> = json(
         app.clone(),
         "/v1/stops/platform-a/departures?date=2026-10-03&after=25:00:00",
     )
     .await;
-    assert_eq!(added[0]["trip_id"], "trip-late");
-    assert_eq!(added[0]["scheduled_departure"], "25:11:00");
+    assert_eq!(added[0].trip_id, "trip-late");
+    assert_eq!(added[0].scheduled_departure, "25:11:00");
 
-    let stops = json(app.clone(), "/v1/trips/trip-late/stops").await;
-    assert_eq!(stops[1]["stop"]["platform_code"], "B");
-    let shape = json(app, "/v1/trips/trip-late/shape").await;
-    assert_eq!(shape.as_array().unwrap().len(), 3);
+    let stops: Vec<ScheduledStopCall> = json(app.clone(), "/v1/trips/trip-late/stops").await;
+    assert_eq!(stops[1].stop.platform_code.as_deref(), Some("B"));
+    let shape: Vec<ShapePoint> = json(app, "/v1/trips/trip-late/shape").await;
+    assert_eq!(shape.len(), 3);
 }

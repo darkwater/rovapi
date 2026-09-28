@@ -1,3 +1,5 @@
+use ovapi_models::MAX_LIMIT;
+
 use crate::{error::ApiError, gtfs::GtfsDate};
 
 pub(crate) mod routes;
@@ -5,13 +7,11 @@ pub(crate) mod schedule;
 pub(crate) mod stops;
 pub(crate) mod trips;
 
-pub(crate) const fn default_limit() -> usize {
-    20
-}
-
 pub(crate) fn validate_limit(limit: usize) -> Result<(), ApiError> {
-    if !(1..=100).contains(&limit) {
-        return Err(ApiError::bad_request("limit must be between 1 and 100"));
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(ApiError::bad_request(format!(
+            "limit must be between 1 and {MAX_LIMIT}"
+        )));
     }
     Ok(())
 }
