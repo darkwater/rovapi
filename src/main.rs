@@ -1,6 +1,6 @@
 use std::{env, error::Error, fs::File, io, path::PathBuf};
 
-use ovapi::{
+use rovapi::{
     AppState, Config,
     download::{DownloadOutcome, FeedDownloader},
     gtfs::ImportLimits,
@@ -223,20 +223,20 @@ fn command_from_args() -> Result<Command, io::Error> {
         [command] if command == "status" => Ok(Command::Status),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version> | activate <version> | versions | status]",
+            "usage: rovapi [import <gtfs.zip> <version> | fetch <url> <version> | activate <version> | versions | status]",
         )),
     }
 }
 
 fn print_usage() {
     println!(
-        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n    ovapi activate <version>\n    ovapi versions\n    ovapi status\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
+        "rovapi\n\nUSAGE:\n    rovapi\n    rovapi import <gtfs.zip> <version>\n    rovapi fetch <url> <version>\n    rovapi activate <version>\n    rovapi versions\n    rovapi status\n\nENVIRONMENT:\n    ROVAPI_DATA_DIR       Data directory (default: data)\n    ROVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG              Tracing filter"
     );
 }
 
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("ovapi=info,tower_http=info"));
+        .unwrap_or_else(|_| EnvFilter::new("rovapi=info,tower_http=info"));
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }

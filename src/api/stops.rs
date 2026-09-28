@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State, rejection::QueryRejection},
 };
-use ovapi_models::{DeparturesQuery, NearbyStopsQuery, StopSearchQuery};
+use rovapi_models::{DeparturesQuery, NearbyStopsQuery, StopSearchQuery};
 
 use crate::{
     AppState,

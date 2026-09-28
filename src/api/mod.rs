@@ -1,4 +1,4 @@
-use ovapi_models::MAX_LIMIT;
+use rovapi_models::MAX_LIMIT;
 
 use crate::{error::ApiError, gtfs::GtfsDate};
 

@@ -48,7 +48,7 @@ impl FeedDownloader {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(15 * 60))
-            .user_agent(concat!("ovapi/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("rovapi/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self { client, max_bytes })
     }
@@ -237,7 +237,7 @@ mod tests {
     fn destination(label: &str) -> PathBuf {
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "ovapi-download-{label}-{}-{sequence}.zip",
+            "rovapi-download-{label}-{}-{sequence}.zip",
             std::process::id()
         ))
     }

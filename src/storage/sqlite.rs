@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ovapi_models::{
+use rovapi_models::{
     FeedInfo as StoredFeedInfo, NearbyStop, Route as StoredRoute,
     ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall,
     ShapePoint as StoredShapePoint, Stop as StoredStop, Trip as StoredTrip,
@@ -1111,7 +1111,7 @@ mod tests {
             let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             Self(
                 std::env::temp_dir()
-                    .join(format!("ovapi-{}-{sequence}.sqlite", std::process::id())),
+                    .join(format!("rovapi-{}-{sequence}.sqlite", std::process::id())),
             )
         }
 

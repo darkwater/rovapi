@@ -10,14 +10,14 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use ovapi::{
+use rovapi::{
     AppState,
     gtfs::ImportLimits,
     router,
     schedule::{DataDirectory, ScheduleVersion},
     storage::SqliteReader,
 };
-use ovapi_models::{
+use rovapi_models::{
     ReadyResponse, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
 };
 use serde::de::DeserializeOwned;
@@ -32,7 +32,7 @@ impl TemporaryDirectory {
     fn new() -> Self {
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         Self(std::env::temp_dir().join(format!(
-            "ovapi-integration-{}-{sequence}",
+            "rovapi-integration-{}-{sequence}",
             std::process::id()
         )))
     }

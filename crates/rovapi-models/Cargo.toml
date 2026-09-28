@@ -1,9 +1,9 @@
 [package]
-name = "ovapi-models"
+name = "rovapi-models"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Transport-independent wire models for the OVAPI HTTP API"
+description = "Transport-independent wire models for the ROVAPI HTTP API"
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }

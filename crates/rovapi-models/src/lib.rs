@@ -1,4 +1,4 @@
-//! Transport-independent request and response models for the OVAPI HTTP API.
+//! Transport-independent request and response models for the ROVAPI HTTP API.
 //!
 //! These types describe the JSON bodies and query parameters exposed by the
 //! server. The crate deliberately does not select an HTTP client or async

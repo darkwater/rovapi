@@ -1,12 +1,15 @@
-# ovapi
+# ROVAPI
 
 An API for Dutch public-transport schedules, departures, disruptions, and live
 vehicle positions.
 
-OVAPI is designed as a standalone Rust service. Its schedule database is an
+ROVAPI is designed as a standalone Rust service. Its schedule database is an
 embedded, bundled SQLite build; no PostgreSQL, Redis, JVM, or other service is
 required. FTS5 powers stop search and an R-tree narrows spatial queries before
 exact distance filtering.
+
+ROVAPI is a separate project from OVapi.nl; that service can still be used as
+an upstream source of Dutch GTFS data.
 
 The project is in its initial scaffolding phase. See [PLAN.md](PLAN.md) for the
 data-source research, architecture, API outline, and implementation milestones.
@@ -17,7 +20,7 @@ First fetch or locally import and activate a GTFS ZIP. The version is an
 operator-chosen ASCII label and becomes the immutable schedule filename:
 
 ```sh
-OVAPI_DATA_DIR=./data cargo run -- fetch \
+ROVAPI_DATA_DIR=./data cargo run -- fetch \
   https://example.nl/gtfs.zip 2026-09-28
 ```
 
@@ -32,7 +35,7 @@ completed local snapshot rather than downloading it again.
 For a GTFS ZIP already on disk:
 
 ```sh
-OVAPI_DATA_DIR=./data cargo run -- import ./gtfs.zip 2026-09-28
+ROVAPI_DATA_DIR=./data cargo run -- import ./gtfs.zip 2026-09-28
 ```
 
 The import validates the archive, builds SQLite transactionally, checks the
@@ -43,14 +46,14 @@ To roll back to an installed version, or finish activation after a metadata
 write failure:
 
 ```sh
-OVAPI_DATA_DIR=./data cargo run -- activate 2026-09-28
+ROVAPI_DATA_DIR=./data cargo run -- activate 2026-09-28
 ```
 
 Inspect the installed versions or print the active schedule and feed metadata:
 
 ```sh
-OVAPI_DATA_DIR=./data cargo run -- versions
-OVAPI_DATA_DIR=./data cargo run -- status
+ROVAPI_DATA_DIR=./data cargo run -- versions
+ROVAPI_DATA_DIR=./data cargo run -- status
 ```
 
 Then start the server:
@@ -59,13 +62,13 @@ Then start the server:
 cargo run
 ```
 
-The service binds to `127.0.0.1:3000` by default. Set `OVAPI_BIND_ADDRESS` to
-change it, `OVAPI_DATA_DIR` to select the standalone data directory, and
+The service binds to `127.0.0.1:3000` by default. Set `ROVAPI_BIND_ADDRESS` to
+change it, `ROVAPI_DATA_DIR` to select the standalone data directory, and
 `RUST_LOG` to configure tracing.
 
 ```sh
-OVAPI_BIND_ADDRESS=0.0.0.0:8080 OVAPI_DATA_DIR=./data \
-  RUST_LOG=ovapi=debug,tower_http=debug cargo run
+ROVAPI_BIND_ADDRESS=0.0.0.0:8080 ROVAPI_DATA_DIR=./data \
+  RUST_LOG=rovapi=debug,tower_http=debug cargo run
 ```
 
 Endpoints currently available:
@@ -104,22 +107,22 @@ liveness continues to report whether the process itself is running.
 
 ## Rust API models
 
-The workspace contains the transport-independent `ovapi-models` crate. It is
+The workspace contains the transport-independent `rovapi-models` crate. It is
 the source of truth for the server's JSON response bodies and query parameters,
 and provides both `Serialize` and `Deserialize` implementations without
 depending on Axum, Tokio, or a particular HTTP client.
 
 ```toml
 [dependencies]
-ovapi-models = { path = "../ovapi/crates/ovapi-models" }
+rovapi-models = { path = "../rovapi/crates/rovapi-models" }
 ```
 
 ```rust
-let departures: Vec<ovapi_models::ScheduledDeparture> =
+let departures: Vec<rovapi_models::ScheduledDeparture> =
     serde_json::from_slice(response_body)?;
 ```
 
-The server crate also re-exports it as `ovapi::models` for applications which
+The server crate also re-exports it as `rovapi::models` for applications which
 already depend on the full service package.
 
 Schedule databases are validated and imported transactionally, then installed

@@ -1,5 +1,5 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use ovapi_models::{ErrorDetail, ErrorResponse, error_code};
+use rovapi_models::{ErrorDetail, ErrorResponse, error_code};
 
 use crate::storage::StorageError;
 

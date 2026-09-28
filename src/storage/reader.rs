@@ -188,7 +188,7 @@ impl SqliteReader {
             let worker_path = path.clone();
             let worker_live_workers = Arc::clone(&live_workers);
             std::thread::Builder::new()
-                .name(format!("ovapi-sqlite-reader-{worker_index}"))
+                .name(format!("rovapi-sqlite-reader-{worker_index}"))
                 .spawn(move || {
                     let store = match SqliteStore::open_read_only(worker_path) {
                         Ok(store) => store,
@@ -501,7 +501,7 @@ mod tests {
     async fn serves_queries_without_blocking_the_async_runtime() {
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "ovapi-reader-{}-{sequence}.sqlite",
+            "rovapi-reader-{}-{sequence}.sqlite",
             std::process::id()
         ));
         let mut store = SqliteStore::create(&path).unwrap();

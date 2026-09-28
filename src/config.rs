@@ -17,18 +17,18 @@ pub struct ConfigError {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let value = match env::var("OVAPI_BIND_ADDRESS") {
+        let value = match env::var("ROVAPI_BIND_ADDRESS") {
             Ok(value) => value,
             Err(VarError::NotPresent) => DEFAULT_BIND_ADDRESS.to_owned(),
             Err(VarError::NotUnicode(value)) => {
                 return Err(ConfigError {
-                    variable: "OVAPI_BIND_ADDRESS",
+                    variable: "ROVAPI_BIND_ADDRESS",
                     value: value.to_string_lossy().into_owned(),
                 });
             }
         };
         let bind_address = value.parse().map_err(|_| ConfigError {
-            variable: "OVAPI_BIND_ADDRESS",
+            variable: "ROVAPI_BIND_ADDRESS",
             value,
         })?;
 
@@ -41,7 +41,7 @@ impl Config {
     }
 
     pub fn data_directory_from_env() -> PathBuf {
-        env::var_os("OVAPI_DATA_DIR")
+        env::var_os("ROVAPI_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIRECTORY))
     }

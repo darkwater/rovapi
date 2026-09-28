@@ -16,7 +16,10 @@ use crate::{
 
 const ACTIVE_FILE: &str = "active.json";
 const ACTIVE_TEMP_FILE: &str = ".active.json.tmp";
-const LOCK_FILE: &str = ".ovapi.lock";
+const LOCK_FILE: &str = ".rovapi.lock";
+// Acquiring the legacy lock prevents an older pre-rename binary from writing
+// the same data directory concurrently during migration.
+const LEGACY_LOCK_FILE: &str = ".ovapi.lock";
 const MAX_ACTIVE_FILE_BYTES: u64 = 4 * 1024;
 const DOWNLOAD_STATE_FILE: &str = "static-feed.json";
 const DOWNLOAD_STATE_TEMP_FILE: &str = ".static-feed.json.tmp";
@@ -77,6 +80,7 @@ pub struct DataDirectory {
     root: PathBuf,
     schedules: PathBuf,
     _lock: File,
+    _legacy_lock: File,
 }
 
 #[derive(Debug)]
@@ -99,22 +103,14 @@ impl DataDirectory {
         fs::create_dir_all(root.join("snapshots"))?;
         fs::create_dir_all(root.join("state"))?;
 
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(root.join(LOCK_FILE))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(ScheduleError::AlreadyRunning),
-            Err(TryLockError::Error(error)) => return Err(ScheduleError::Io(error)),
-        }
+        let legacy_lock = lock_file(root.join(LEGACY_LOCK_FILE))?;
+        let lock = lock_file(root.join(LOCK_FILE))?;
 
         Ok(Self {
             root,
             schedules,
             _lock: lock,
+            _legacy_lock: legacy_lock,
         })
     }
 
@@ -369,7 +365,9 @@ fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
 impl fmt::Display for ScheduleError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AlreadyRunning => write!(formatter, "the OVAPI data directory is already in use"),
+            Self::AlreadyRunning => {
+                write!(formatter, "the ROVAPI data directory is already in use")
+            }
             Self::InvalidActiveFile(message) => {
                 write!(formatter, "invalid active schedule metadata: {message}")
             }
@@ -390,6 +388,20 @@ impl fmt::Display for ScheduleError {
             }
             Self::Storage(error) => write!(formatter, "invalid schedule database: {error}"),
         }
+    }
+}
+
+fn lock_file(path: PathBuf) -> Result<File, ScheduleError> {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(TryLockError::WouldBlock) => Err(ScheduleError::AlreadyRunning),
+        Err(TryLockError::Error(error)) => Err(ScheduleError::Io(error)),
     }
 }
 
@@ -486,7 +498,9 @@ mod tests {
     impl TempDirectory {
         fn new() -> Self {
             let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            Self(std::env::temp_dir().join(format!("ovapi-data-{}-{sequence}", std::process::id())))
+            Self(
+                std::env::temp_dir().join(format!("rovapi-data-{}-{sequence}", std::process::id())),
+            )
         }
     }
 
@@ -580,6 +594,18 @@ mod tests {
     fn prevents_two_writers_for_one_data_directory() {
         let temporary = TempDirectory::new();
         let _first = DataDirectory::open(&temporary.0).unwrap();
+        assert!(matches!(
+            DataDirectory::open(&temporary.0),
+            Err(ScheduleError::AlreadyRunning)
+        ));
+    }
+
+    #[test]
+    fn respects_the_pre_rename_data_directory_lock() {
+        let temporary = TempDirectory::new();
+        fs::create_dir_all(&temporary.0).unwrap();
+        let _legacy_process = lock_file(temporary.0.join(LEGACY_LOCK_FILE)).unwrap();
+
         assert!(matches!(
             DataDirectory::open(&temporary.0),
             Err(ScheduleError::AlreadyRunning)

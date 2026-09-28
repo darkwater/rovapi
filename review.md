@@ -1,4 +1,4 @@
-# OVAPI code review
+# ROVAPI code review
 
 Reviewed: 2026-09-28
 
@@ -44,7 +44,7 @@ Substantially addressed, with follow-up still useful:
 - **T2:** invalid geographic input and no-pickup behavior now have regression
   coverage, but the complete extractor/error-contract matrix is still open.
 - **M18:** public wire types and query models now live in the independent
-  `ovapi-models` crate and are shared by server and consumers. The current v1
+  `rovapi-models` crate and are shared by server and consumers. The current v1
   fields still expose raw GTFS identifiers and numeric concepts; introducing
   canonical source-independent IDs and enums remains open.
 

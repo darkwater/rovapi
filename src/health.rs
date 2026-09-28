@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{Json, extract::State, http::StatusCode};
-use ovapi_models::{LiveResponse, ReadyResponse};
+use rovapi_models::{LiveResponse, ReadyResponse};
 
 use crate::AppState;
 

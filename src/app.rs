@@ -297,7 +297,7 @@ mod tests {
     async fn stop_search_uses_loaded_schedule() {
         let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "ovapi-app-{}-{sequence}.sqlite",
+            "rovapi-app-{}-{sequence}.sqlite",
             std::process::id()
         ));
         let mut store = SqliteStore::create(&path).unwrap();
@@ -338,7 +338,7 @@ mod tests {
     async fn scheduled_departure_endpoint_uses_service_date_and_gtfs_time() {
         let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "ovapi-departures-{}-{sequence}.sqlite",
+            "rovapi-departures-{}-{sequence}.sqlite",
             std::process::id()
         ));
         let mut store = SqliteStore::create(&path).unwrap();
