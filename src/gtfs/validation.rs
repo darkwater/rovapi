@@ -94,6 +94,16 @@ pub fn validate<R: Read + Seek>(
 
     let mut agency_ids = HashSet::new();
     report.counts.agencies = archive.visit_agencies(|agency| {
+        if agency.agency_name.is_empty()
+            || agency.agency_url.is_empty()
+            || agency.agency_timezone.is_empty()
+        {
+            report.issue(
+                "incomplete_agency",
+                agency.agency_id.clone(),
+                "agency_name, agency_url, and agency_timezone are required".to_owned(),
+            );
+        }
         if !agency_ids.insert(agency.agency_id.clone()) {
             report.issue(
                 "duplicate_agency",
@@ -121,6 +131,13 @@ pub fn validate<R: Read + Seek>(
     let mut stop_hierarchy = HashMap::new();
     report.counts.stops = archive.visit_stops(|stop| {
         let stop_id = stop.stop_id.clone();
+        if stop_id.is_empty() {
+            report.issue(
+                "missing_stop_id",
+                "stops.txt".to_owned(),
+                "stop_id is required".to_owned(),
+            );
+        }
         if !stop_ids.insert(stop_id.clone()) {
             report.issue(
                 "duplicate_stop",
@@ -219,6 +236,20 @@ pub fn validate<R: Read + Seek>(
 
     let mut route_ids = HashSet::new();
     report.counts.routes = archive.visit_routes(|route| {
+        if route.route_id.is_empty() {
+            report.issue(
+                "missing_route_id",
+                "routes.txt".to_owned(),
+                "route_id is required".to_owned(),
+            );
+        }
+        if route.route_short_name.is_empty() && route.route_long_name.is_empty() {
+            report.issue(
+                "missing_route_name",
+                route.route_id.clone(),
+                "route_short_name or route_long_name is required".to_owned(),
+            );
+        }
         if !route_ids.insert(route.route_id.clone()) {
             report.issue(
                 "duplicate_route",
@@ -341,6 +372,20 @@ pub fn validate<R: Read + Seek>(
     let mut trip_ids = HashSet::new();
     let mut trip_routes = HashMap::new();
     report.counts.trips = archive.visit_trips(|trip| {
+        if trip.trip_id.is_empty() || trip.route_id.is_empty() || trip.service_id.is_empty() {
+            report.issue(
+                "incomplete_trip",
+                trip.trip_id.clone(),
+                "trip_id, route_id, and service_id are required".to_owned(),
+            );
+        }
+        if trip.direction_id.is_some_and(|value| value > 1) {
+            report.issue(
+                "invalid_direction_id",
+                trip.trip_id.clone(),
+                "direction_id must be 0 or 1".to_owned(),
+            );
+        }
         if !trip_ids.insert(trip.trip_id.clone()) {
             report.issue(
                 "duplicate_trip",
@@ -510,6 +555,27 @@ pub fn validate<R: Read + Seek>(
 
     let mut last_sequence_by_trip = HashMap::new();
     report.counts.stop_times = archive.visit_stop_times(|stop_time| {
+        let record = format!("{}:{}", stop_time.trip_id, stop_time.stop_sequence);
+        if stop_time.trip_id.is_empty() || stop_time.stop_id.is_empty() {
+            report.issue(
+                "incomplete_stop_time",
+                record.clone(),
+                "trip_id and stop_id are required".to_owned(),
+            );
+        }
+        for (field, value, maximum) in [
+            ("pickup_type", stop_time.pickup_type, 3),
+            ("drop_off_type", stop_time.drop_off_type, 3),
+            ("timepoint", stop_time.timepoint, 1),
+        ] {
+            if value.is_some_and(|value| value > maximum) {
+                report.issue(
+                    "invalid_stop_time_enum",
+                    record.clone(),
+                    format!("{field} must be between 0 and {maximum}"),
+                );
+            }
+        }
         if !trip_ids.contains(&stop_time.trip_id) {
             report.issue(
                 "unknown_trip",
@@ -702,6 +768,36 @@ mod tests {
         assert!(codes.contains("unknown_route"));
         assert!(codes.contains("unknown_stop"));
         assert!(codes.contains("non_increasing_stop_sequence"));
+    }
+
+    #[test]
+    fn validates_required_fields_and_enumerations() {
+        let mut feed = archive(&[
+            (
+                "agency.txt",
+                "agency_id,agency_name,agency_url,agency_timezone\nNL,,,\n",
+            ),
+            (
+                "routes.txt",
+                "route_id,agency_id,route_short_name,route_long_name,route_type\n,NL,,,3\n",
+            ),
+            (
+                "trips.txt",
+                "route_id,service_id,trip_id,direction_id\nroute-1,weekday,trip-1,2\n",
+            ),
+            (
+                "stop_times.txt",
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type,timepoint\ntrip-1,10:00:00,10:00:00,stop-1,1,4,4,2\n",
+            ),
+        ]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("incomplete_agency"));
+        assert!(codes.contains("missing_route_id"));
+        assert!(codes.contains("missing_route_name"));
+        assert!(codes.contains("invalid_direction_id"));
+        assert!(codes.contains("invalid_stop_time_enum"));
     }
 
     #[test]

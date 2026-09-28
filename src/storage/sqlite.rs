@@ -60,6 +60,9 @@ pub struct ScheduledDeparture {
     pub service_date: GtfsDate,
     pub scheduled_departure: String,
     pub scheduled_departure_seconds: u32,
+    pub pickup_type: u8,
+    pub drop_off_type: u8,
+    pub timepoint: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -653,13 +656,16 @@ impl ScheduleRepository for SqliteStore {
         let mut statement = self.connection.prepare(
             "SELECT t.source_id, r.source_id, r.short_name, r.long_name,
                     COALESCE(st.stop_headsign, t.headsign), st.stop_sequence,
-                    st.departure_service_seconds
+                    st.departure_service_seconds,
+                    COALESCE(st.pickup_type, 0), COALESCE(st.drop_off_type, 0),
+                    COALESCE(st.timepoint, 1)
              FROM stops AS s
              JOIN stop_times AS st ON st.stop_id = s.id
              JOIN trips AS t ON t.id = st.trip_id
              JOIN routes AS r ON r.id = t.route_id
              WHERE s.source_id = ?1
                AND st.departure_service_seconds IS NOT NULL
+               AND COALESCE(st.pickup_type, 0) != 1
                AND st.departure_service_seconds >= ?3
                AND (
                    EXISTS (
@@ -712,6 +718,9 @@ impl ScheduleRepository for SqliteStore {
                     service_date: date,
                     scheduled_departure: GtfsTime::from_seconds(seconds).to_string(),
                     scheduled_departure_seconds: seconds,
+                    pickup_type: row.get(7)?,
+                    drop_off_type: row.get(8)?,
+                    timepoint: row.get(9)?,
                 })
             },
         )?;
@@ -1428,6 +1437,9 @@ mod tests {
         assert_eq!(added_tuesday.len(), 1);
         assert_eq!(added_tuesday[0].scheduled_departure, "25:11:00");
         assert_eq!(added_tuesday[0].route_short_name.as_deref(), Some("8"));
+        assert_eq!(added_tuesday[0].pickup_type, 0);
+        assert_eq!(added_tuesday[0].drop_off_type, 0);
+        assert_eq!(added_tuesday[0].timepoint, 1);
         assert_eq!(
             store
                 .route_trips("route-1", GtfsDate::parse_iso("2026-09-29").unwrap(), 20,)
@@ -1445,6 +1457,20 @@ mod tests {
             )
             .unwrap();
         assert!(after_departure.is_empty());
+
+        store
+            .connection
+            .execute("UPDATE stop_times SET pickup_type = 1", [])
+            .unwrap();
+        let no_pickup = store
+            .scheduled_departures(
+                "stop-1",
+                GtfsDate::parse_iso("2026-09-29").unwrap(),
+                "25:00:00".parse().unwrap(),
+                20,
+            )
+            .unwrap();
+        assert!(no_pickup.is_empty());
     }
 
     #[test]
