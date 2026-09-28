@@ -13,8 +13,20 @@ data-source research, architecture, API outline, and implementation milestones.
 
 ## Run locally
 
-First import and activate a GTFS ZIP. The version is an operator-chosen ASCII
-label and becomes the immutable schedule filename:
+First fetch or locally import and activate a GTFS ZIP. The version is an
+operator-chosen ASCII label and becomes the immutable schedule filename:
+
+```sh
+OVAPI_DATA_DIR=./data cargo run -- fetch \
+  https://example.nl/gtfs.zip 2026-09-28
+```
+
+The fetch command streams into a snapshot with a 1 GiB compressed-size limit,
+then validates and activates it. Successful response validators are persisted;
+subsequent fetches for the same URL send `If-None-Match` and
+`If-Modified-Since`, avoiding another import after HTTP 304.
+
+For a GTFS ZIP already on disk:
 
 ```sh
 OVAPI_DATA_DIR=./data cargo run -- import ./gtfs.zip 2026-09-28

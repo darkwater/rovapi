@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod config;
+pub mod download;
 pub mod error;
 pub mod gtfs;
 pub mod health;

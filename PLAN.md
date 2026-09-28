@@ -209,7 +209,7 @@ headers. Geographic vehicle queries require a bounded viewport.
 
 ### M1 — static GTFS
 
-- [ ] Feed downloader with conditional requests and size limits
+- [x] Feed downloader with conditional requests and size limits
 - [x] Offline GTFS import-and-activate command
 - [x] Streaming ZIP/CSV reader with archive limits and core typed records
 - [x] Cross-record validation report for core identity/reference invariants

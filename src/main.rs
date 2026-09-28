@@ -2,6 +2,7 @@ use std::{env, error::Error, fs::File, io, path::PathBuf};
 
 use ovapi::{
     AppState, Config,
+    download::{DownloadOutcome, FeedDownloader},
     gtfs::ImportLimits,
     router,
     schedule::{DataDirectory, ScheduleVersion},
@@ -39,6 +40,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
             return Ok(());
         }
+        Command::Fetch { url, version } => {
+            let version = ScheduleVersion::parse(version)?;
+            let data_directory = DataDirectory::open(Config::data_directory_from_env())?;
+            let validators = data_directory.download_validators(&url)?;
+            let snapshot = data_directory.snapshot_path(&version);
+            info!(%url, version = version.as_str(), "checking GTFS feed");
+            let downloader = FeedDownloader::new(1024 * 1024 * 1024)?;
+            match downloader.download(&url, &snapshot, &validators).await? {
+                DownloadOutcome::NotModified => {
+                    info!(%url, "GTFS feed has not changed");
+                }
+                DownloadOutcome::Downloaded(downloaded) => {
+                    info!(%url, bytes = downloaded.bytes, path = %snapshot.display(), "GTFS feed downloaded");
+                    let file = File::open(&snapshot)?;
+                    let (active, summary) = data_directory.import_and_activate(
+                        &version,
+                        file,
+                        ImportLimits::default(),
+                    )?;
+                    data_directory.save_download_validators(&url, downloaded.validators)?;
+                    info!(
+                        version = active.version.as_str(),
+                        stops = summary.stops,
+                        routes = summary.routes,
+                        trips = summary.trips,
+                        stop_times = summary.stop_times,
+                        "downloaded GTFS schedule imported and activated"
+                    );
+                }
+            }
+            return Ok(());
+        }
         Command::Help => {
             print_usage();
             return Ok(());
@@ -72,6 +105,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 enum Command {
     Serve,
     Import { gtfs_zip: PathBuf, version: String },
+    Fetch { url: String, version: String },
     Help,
 }
 
@@ -89,16 +123,28 @@ fn command_from_args() -> Result<Command, io::Error> {
                 version: version.to_owned(),
             })
         }
+        [command, url, version] if command == "fetch" => {
+            let url = url.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "URL must be valid UTF-8")
+            })?;
+            let version = version.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "version must be valid UTF-8")
+            })?;
+            Ok(Command::Fetch {
+                url: url.to_owned(),
+                version: version.to_owned(),
+            })
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: ovapi [import <gtfs.zip> <version>]",
+            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version>]",
         )),
     }
 }
 
 fn print_usage() {
     println!(
-        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
+        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
     );
 }
 

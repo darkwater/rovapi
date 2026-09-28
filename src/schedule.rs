@@ -9,6 +9,7 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
+    download::DownloadValidators,
     gtfs::{GtfsArchive, ImportLimits},
     storage::{ImportSummary, SqliteStore, StorageError},
 };
@@ -17,6 +18,15 @@ const ACTIVE_FILE: &str = "active.json";
 const ACTIVE_TEMP_FILE: &str = ".active.json.tmp";
 const LOCK_FILE: &str = ".ovapi.lock";
 const MAX_ACTIVE_FILE_BYTES: u64 = 4 * 1024;
+const DOWNLOAD_STATE_FILE: &str = "static-feed.json";
+const DOWNLOAD_STATE_TEMP_FILE: &str = ".static-feed.json.tmp";
+const MAX_DOWNLOAD_STATE_BYTES: u64 = 16 * 1024;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DownloadState {
+    url: String,
+    validators: DownloadValidators,
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -73,6 +83,7 @@ pub struct DataDirectory {
 pub enum ScheduleError {
     AlreadyRunning,
     InvalidActiveFile(&'static str),
+    InvalidDownloadState(&'static str),
     InvalidVersion(String),
     Io(std::io::Error),
     Metadata(serde_json::Error),
@@ -114,6 +125,64 @@ impl DataDirectory {
 
     pub fn database_path(&self, version: &ScheduleVersion) -> PathBuf {
         self.schedules.join(version.database_filename())
+    }
+
+    pub fn snapshot_path(&self, version: &ScheduleVersion) -> PathBuf {
+        self.root
+            .join("snapshots")
+            .join(format!("{}.gtfs.zip", version.as_str()))
+    }
+
+    pub fn download_validators(&self, url: &str) -> Result<DownloadValidators, ScheduleError> {
+        let path = self.root.join("state").join(DOWNLOAD_STATE_FILE);
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(DownloadValidators::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if file.metadata()?.len() > MAX_DOWNLOAD_STATE_BYTES {
+            return Err(ScheduleError::InvalidDownloadState(
+                "feed download state is too large",
+            ));
+        }
+        let state: DownloadState = serde_json::from_reader(BufReader::new(file))?;
+        if state.url == url {
+            Ok(state.validators)
+        } else {
+            Ok(DownloadValidators::default())
+        }
+    }
+
+    pub fn save_download_validators(
+        &self,
+        url: &str,
+        validators: DownloadValidators,
+    ) -> Result<(), ScheduleError> {
+        let state_directory = self.root.join("state");
+        let temporary_path = state_directory.join(DOWNLOAD_STATE_TEMP_FILE);
+        let final_path = state_directory.join(DOWNLOAD_STATE_FILE);
+        let temporary = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temporary_path)?;
+        let mut writer = BufWriter::new(temporary);
+        serde_json::to_writer(
+            &mut writer,
+            &DownloadState {
+                url: url.to_owned(),
+                validators,
+            },
+        )?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        drop(writer);
+        fs::rename(temporary_path, final_path)?;
+        sync_directory(&state_directory)?;
+        Ok(())
     }
 
     /// Imports a GTFS ZIP into a new immutable schedule version and activates it.
@@ -282,6 +351,9 @@ impl fmt::Display for ScheduleError {
             Self::AlreadyRunning => write!(formatter, "the OVAPI data directory is already in use"),
             Self::InvalidActiveFile(message) => {
                 write!(formatter, "invalid active schedule metadata: {message}")
+            }
+            Self::InvalidDownloadState(message) => {
+                write!(formatter, "invalid feed download state: {message}")
             }
             Self::InvalidVersion(version) => {
                 write!(formatter, "invalid schedule version {version:?}")
@@ -456,6 +528,30 @@ mod tests {
         ));
         assert!(!data.staging_path(&version).exists());
         assert!(!data.database_path(&version).exists());
+    }
+
+    #[test]
+    fn persists_download_validators_per_feed_url() {
+        let temporary = TempDirectory::new();
+        let data = DataDirectory::open(&temporary.0).unwrap();
+        let validators = DownloadValidators {
+            etag: Some("\"version-1\"".to_owned()),
+            last_modified: Some("Mon, 28 Sep 2026 10:00:00 GMT".to_owned()),
+        };
+
+        data.save_download_validators("https://example.nl/gtfs.zip", validators.clone())
+            .unwrap();
+
+        assert_eq!(
+            data.download_validators("https://example.nl/gtfs.zip")
+                .unwrap(),
+            validators
+        );
+        assert_eq!(
+            data.download_validators("https://other.example/gtfs.zip")
+                .unwrap(),
+            DownloadValidators::default()
+        );
     }
 
     #[test]
