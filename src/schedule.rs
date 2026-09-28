@@ -17,9 +17,6 @@ use crate::{
 const ACTIVE_FILE: &str = "active.json";
 const ACTIVE_TEMP_FILE: &str = ".active.json.tmp";
 const LOCK_FILE: &str = ".rovapi.lock";
-// Acquiring the legacy lock prevents an older pre-rename binary from writing
-// the same data directory concurrently during migration.
-const LEGACY_LOCK_FILE: &str = ".ovapi.lock";
 const MAX_ACTIVE_FILE_BYTES: u64 = 4 * 1024;
 const DOWNLOAD_STATE_FILE: &str = "static-feed.json";
 const DOWNLOAD_STATE_TEMP_FILE: &str = ".static-feed.json.tmp";
@@ -80,7 +77,6 @@ pub struct DataDirectory {
     root: PathBuf,
     schedules: PathBuf,
     _lock: File,
-    _legacy_lock: File,
 }
 
 #[derive(Debug)]
@@ -103,14 +99,12 @@ impl DataDirectory {
         fs::create_dir_all(root.join("snapshots"))?;
         fs::create_dir_all(root.join("state"))?;
 
-        let legacy_lock = lock_file(root.join(LEGACY_LOCK_FILE))?;
         let lock = lock_file(root.join(LOCK_FILE))?;
 
         Ok(Self {
             root,
             schedules,
             _lock: lock,
-            _legacy_lock: legacy_lock,
         })
     }
 
@@ -594,18 +588,6 @@ mod tests {
     fn prevents_two_writers_for_one_data_directory() {
         let temporary = TempDirectory::new();
         let _first = DataDirectory::open(&temporary.0).unwrap();
-        assert!(matches!(
-            DataDirectory::open(&temporary.0),
-            Err(ScheduleError::AlreadyRunning)
-        ));
-    }
-
-    #[test]
-    fn respects_the_pre_rename_data_directory_lock() {
-        let temporary = TempDirectory::new();
-        fs::create_dir_all(&temporary.0).unwrap();
-        let _legacy_process = lock_file(temporary.0.join(LEGACY_LOCK_FILE)).unwrap();
-
         assert!(matches!(
             DataDirectory::open(&temporary.0),
             Err(ScheduleError::AlreadyRunning)
