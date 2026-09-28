@@ -1,13 +1,16 @@
 use std::{
     fmt,
     fs::{self, File, OpenOptions, TryLockError},
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Seek, Write},
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::storage::{SqliteStore, StorageError};
+use crate::{
+    gtfs::{GtfsArchive, ImportLimits},
+    storage::{ImportSummary, SqliteStore, StorageError},
+};
 
 const ACTIVE_FILE: &str = "active.json";
 const ACTIVE_TEMP_FILE: &str = ".active.json.tmp";
@@ -112,6 +115,34 @@ impl DataDirectory {
         self.schedules.join(version.database_filename())
     }
 
+    /// Imports a GTFS ZIP into a new immutable schedule version and activates it.
+    ///
+    /// Failed imports remove their private staging database and SQLite sidecars,
+    /// so the same version can be retried after correcting the feed.
+    pub fn import_and_activate<R: Read + Seek>(
+        &self,
+        version: &ScheduleVersion,
+        reader: R,
+        limits: ImportLimits,
+    ) -> Result<(ActiveSchedule, ImportSummary), ScheduleError> {
+        if self.database_path(version).exists() {
+            return Err(ScheduleError::InvalidActiveFile(
+                "schedule version already exists",
+            ));
+        }
+
+        let staging = self.staging_path(version);
+        remove_staging_files(&staging)?;
+        let mut staging_guard = StagingGuard::new(staging.clone());
+        let mut archive = GtfsArchive::open(reader, limits).map_err(StorageError::from)?;
+        let mut store = SqliteStore::create(&staging)?;
+        let summary = store.import_gtfs(&mut archive)?;
+        store.prepare_for_activation()?;
+        let active = self.install_and_activate(version)?;
+        staging_guard.disarm();
+        Ok((active, summary))
+    }
+
     /// Moves a finalized staging database into place and activates it.
     pub fn install_and_activate(
         &self,
@@ -190,6 +221,43 @@ impl DataDirectory {
     }
 }
 
+struct StagingGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl StagingGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = remove_staging_files(&self.path);
+    }
+}
+
+fn remove_staging_files(path: &Path) -> Result<(), std::io::Error> {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(suffix);
+        match fs::remove_file(PathBuf::from(candidate)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), std::io::Error> {
     File::open(path)?.sync_all()
@@ -255,11 +323,61 @@ impl From<StorageError> for ScheduleError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        io::Cursor,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::*;
 
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn gtfs(stop_time_stop_id: &str) -> Cursor<Vec<u8>> {
+        let stop_times = format!(
+            "trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip-1,10:00:00,10:01:00,{stop_time_stop_id},1\n"
+        );
+        let files = [
+            (
+                "agency.txt",
+                "agency_id,agency_name,agency_url,agency_timezone\nNL,Example,https://example.nl,Europe/Amsterdam\n",
+            ),
+            (
+                "stops.txt",
+                "stop_id,stop_name,stop_lat,stop_lon\nstop-1,Centraal,52.0907,5.1214\n",
+            ),
+            (
+                "routes.txt",
+                "route_id,agency_id,route_short_name,route_type\nroute-1,NL,8,3\n",
+            ),
+            (
+                "trips.txt",
+                "route_id,service_id,trip_id\nroute-1,weekday,trip-1\n",
+            ),
+            (
+                "calendar.txt",
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
+            ),
+        ];
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut output);
+            for (name, contents) in files {
+                writer
+                    .start_file(name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(contents.as_bytes()).unwrap();
+            }
+            writer
+                .start_file("stop_times.txt", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(stop_times.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        output.set_position(0);
+        output
+    }
 
     struct TempDirectory(PathBuf);
 
@@ -291,6 +409,40 @@ mod tests {
         assert_eq!(data.active().unwrap(), Some(installed));
         assert!(data.database_path(&version).is_file());
         assert!(!data.staging_path(&version).exists());
+    }
+
+    #[test]
+    fn imports_and_activates_gtfs_without_leaving_staging_files() {
+        let temporary = TempDirectory::new();
+        let data = DataDirectory::open(&temporary.0).unwrap();
+        let version = ScheduleVersion::parse("2026-09-28").unwrap();
+
+        let (active, summary) = data
+            .import_and_activate(&version, gtfs("stop-1"), ImportLimits::default())
+            .unwrap();
+
+        assert_eq!(active.version, version);
+        assert_eq!(summary.stop_times, 1);
+        assert!(data.database_path(&version).is_file());
+        assert!(!data.staging_path(&version).exists());
+        assert_eq!(data.active().unwrap(), Some(active));
+    }
+
+    #[test]
+    fn failed_import_removes_staging_database() {
+        let temporary = TempDirectory::new();
+        let data = DataDirectory::open(&temporary.0).unwrap();
+        let version = ScheduleVersion::parse("invalid-feed").unwrap();
+
+        let result =
+            data.import_and_activate(&version, gtfs("missing-stop"), ImportLimits::default());
+
+        assert!(matches!(
+            result,
+            Err(ScheduleError::Storage(StorageError::Validation(_)))
+        ));
+        assert!(!data.staging_path(&version).exists());
+        assert!(!data.database_path(&version).exists());
     }
 
     #[test]

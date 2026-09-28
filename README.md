@@ -13,6 +13,19 @@ data-source research, architecture, API outline, and implementation milestones.
 
 ## Run locally
 
+First import and activate a GTFS ZIP. The version is an operator-chosen ASCII
+label and becomes the immutable schedule filename:
+
+```sh
+OVAPI_DATA_DIR=./data cargo run -- import ./gtfs.zip 2026-09-28
+```
+
+The import validates the archive, builds SQLite transactionally, checks the
+finished database, and atomically updates `active.json`. Run imports while the
+server is stopped; the data-directory lock prevents simultaneous writers.
+
+Then start the server:
+
 ```sh
 cargo run
 ```

@@ -32,14 +32,18 @@ impl Config {
             value,
         })?;
 
-        let data_directory = env::var_os("OVAPI_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIRECTORY));
+        let data_directory = Self::data_directory_from_env();
 
         Ok(Self {
             bind_address,
             data_directory,
         })
+    }
+
+    pub fn data_directory_from_env() -> PathBuf {
+        env::var_os("OVAPI_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIRECTORY))
     }
 }
 
