@@ -6,7 +6,7 @@ use crate::gtfs::{GtfsDate, GtfsTime};
 
 use super::{
     NearbyStop, ScheduleRepository, ScheduledDeparture, ScheduledStopCall, SqliteStore,
-    StorageError, StoredRoute, StoredStop, StoredTrip,
+    StorageError, StoredRoute, StoredShapePoint, StoredStop, StoredTrip,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -63,6 +63,10 @@ enum Command {
     TripStops {
         trip_source_id: String,
         response: oneshot::Sender<Result<Vec<ScheduledStopCall>, StorageError>>,
+    },
+    TripShape {
+        trip_source_id: String,
+        response: oneshot::Sender<Result<Vec<StoredShapePoint>, StorageError>>,
     },
 }
 
@@ -161,6 +165,12 @@ impl SqliteReader {
                             response,
                         } => {
                             let _ = response.send(store.trip_stops(&trip_source_id));
+                        }
+                        Command::TripShape {
+                            trip_source_id,
+                            response,
+                        } => {
+                            let _ = response.send(store.trip_shape(&trip_source_id));
                         }
                     }
                 }
@@ -320,6 +330,21 @@ impl SqliteReader {
         let (response, receiver) = oneshot::channel();
         self.sender
             .send(Command::TripStops {
+                trip_source_id: trip_source_id.into(),
+                response,
+            })
+            .await
+            .map_err(|_| StorageError::WorkerStopped)?;
+        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+    }
+
+    pub async fn trip_shape(
+        &self,
+        trip_source_id: impl Into<String>,
+    ) -> Result<Vec<StoredShapePoint>, StorageError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::TripShape {
                 trip_source_id: trip_source_id.into(),
                 response,
             })

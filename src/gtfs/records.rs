@@ -84,6 +84,16 @@ pub struct StopTime {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ShapePoint {
+    pub shape_id: String,
+    pub shape_pt_lat: f64,
+    pub shape_pt_lon: f64,
+    pub shape_pt_sequence: u32,
+    #[serde(default)]
+    pub shape_dist_traveled: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Calendar {
     pub service_id: String,
     pub monday: u8,

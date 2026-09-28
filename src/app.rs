@@ -15,7 +15,7 @@ use tower_http::{
 use crate::{
     api::routes::{get_route, route_trips, search_routes},
     api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops},
-    api::trips::{get_trip, trip_stops},
+    api::trips::{get_trip, trip_shape, trip_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
     storage::SqliteReader,
@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/routes/:id/trips", get(route_trips))
         .route("/v1/routes/:id", get(get_route))
         .route("/v1/trips/:id/stops", get(trip_stops))
+        .route("/v1/trips/:id/shape", get(trip_shape))
         .route("/v1/trips/:id", get(get_trip))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -143,7 +144,7 @@ mod tests {
             ),
             (
                 "trips.txt",
-                "route_id,service_id,trip_id,trip_headsign\nroute-1,weekday,trip-1,Science Park\n",
+                "route_id,service_id,trip_id,trip_headsign,shape_id\nroute-1,weekday,trip-1,Science Park,shape-1\n",
             ),
             (
                 "stop_times.txt",
@@ -152,6 +153,10 @@ mod tests {
             (
                 "calendar.txt",
                 "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
+            ),
+            (
+                "shapes.txt",
+                "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,52.0907,5.1214,1,0\nshape-1,52.1000,5.1300,2,1200.5\n",
             ),
         ];
         let mut output = Cursor::new(Vec::new());
@@ -387,6 +392,7 @@ mod tests {
         assert_eq!(json[0]["source_id"], "trip-1");
 
         let response = app
+            .clone()
             .oneshot(
                 Request::get("/v1/trips/trip-1/stops")
                     .body(Body::empty())
@@ -400,6 +406,21 @@ mod tests {
                 .unwrap();
         assert_eq!(json[0]["stop"]["source_id"], "stop-1");
         assert_eq!(json[0]["scheduled_departure"], "25:11:00");
+
+        let response = app
+            .oneshot(
+                Request::get("/v1/trips/trip-1/shape")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 2);
+        assert_eq!(json[1]["distance_traveled"], 1200.5);
 
         let _ = fs::remove_file(path);
     }

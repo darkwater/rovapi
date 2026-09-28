@@ -8,7 +8,7 @@ use axum::{
 use crate::{
     AppState,
     error::ApiError,
-    storage::{ScheduledStopCall, StoredTrip},
+    storage::{ScheduledStopCall, StoredShapePoint, StoredTrip},
 };
 
 pub(crate) async fn get_trip(
@@ -42,4 +42,24 @@ pub(crate) async fn trip_stops(
         .await
         .map_err(ApiError::storage)?;
     Ok(Json(stops))
+}
+
+pub(crate) async fn trip_shape(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+) -> Result<Json<Vec<StoredShapePoint>>, ApiError> {
+    let reader = state.schedule()?;
+    if reader
+        .trip(source_id.clone())
+        .await
+        .map_err(ApiError::storage)?
+        .is_none()
+    {
+        return Err(ApiError::not_found("trip does not exist"));
+    }
+    let shape = reader
+        .trip_shape(source_id)
+        .await
+        .map_err(ApiError::storage)?;
+    Ok(Json(shape))
 }

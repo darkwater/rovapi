@@ -12,6 +12,7 @@ pub struct FeedCounts {
     pub routes: u64,
     pub calendars: u64,
     pub calendar_dates: u64,
+    pub shape_points: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -194,6 +195,45 @@ pub fn validate<R: Read + Seek>(
         Ok::<_, GtfsError>(())
     })?;
 
+    let mut shape_ids = HashSet::new();
+    let mut last_shape_sequence = HashMap::new();
+    report.counts.shape_points = archive.visit_shape_points(|point| {
+        shape_ids.insert(point.shape_id.clone());
+        if !(-90.0..=90.0).contains(&point.shape_pt_lat)
+            || !(-180.0..=180.0).contains(&point.shape_pt_lon)
+        {
+            report.issue(
+                "invalid_shape_coordinates",
+                format!("{}:{}", point.shape_id, point.shape_pt_sequence),
+                format!(
+                    "coordinates are outside WGS84 bounds: {}, {}",
+                    point.shape_pt_lat, point.shape_pt_lon
+                ),
+            );
+        }
+        if let Some(previous) =
+            last_shape_sequence.insert(point.shape_id.clone(), point.shape_pt_sequence)
+            && point.shape_pt_sequence <= previous
+        {
+            report.issue(
+                "non_increasing_shape_sequence",
+                format!("{}:{}", point.shape_id, point.shape_pt_sequence),
+                format!("shape_pt_sequence must be greater than {previous}"),
+            );
+        }
+        if point
+            .shape_dist_traveled
+            .is_some_and(|distance| !distance.is_finite() || distance < 0.0)
+        {
+            report.issue(
+                "invalid_shape_distance",
+                format!("{}:{}", point.shape_id, point.shape_pt_sequence),
+                "shape_dist_traveled must be finite and non-negative".to_owned(),
+            );
+        }
+        Ok::<_, GtfsError>(())
+    })?;
+
     let mut trip_ids = HashSet::new();
     report.counts.trips = archive.visit_trips(|trip| {
         if !trip_ids.insert(trip.trip_id.clone()) {
@@ -213,8 +253,15 @@ pub fn validate<R: Read + Seek>(
         if !service_ids.contains(&trip.service_id) {
             report.issue(
                 "unknown_service",
-                trip.trip_id,
+                trip.trip_id.clone(),
                 format!("service_id {:?} does not exist", trip.service_id),
+            );
+        }
+        if !trip.shape_id.is_empty() && !shape_ids.contains(&trip.shape_id) {
+            report.issue(
+                "unknown_shape",
+                trip.trip_id,
+                format!("shape_id {:?} does not exist", trip.shape_id),
             );
         }
         Ok::<_, GtfsError>(())
@@ -277,7 +324,7 @@ mod tests {
             ),
             (
                 "trips.txt",
-                "route_id,service_id,trip_id\nroute-1,weekday,trip-1\n",
+                "route_id,service_id,trip_id,shape_id\nroute-1,weekday,trip-1,shape-1\n",
             ),
             (
                 "stop_times.txt",
@@ -288,6 +335,10 @@ mod tests {
                 "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
             ),
             ("calendar_dates.txt", "service_id,date,exception_type\n"),
+            (
+                "shapes.txt",
+                "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,52.0907,5.1214,1,0\nshape-1,52.1000,5.1300,2,1200.5\n",
+            ),
         ];
         let mut output = Cursor::new(Vec::new());
         {
@@ -314,6 +365,7 @@ mod tests {
         assert!(report.is_valid());
         assert_eq!(report.counts.stop_times, 1);
         assert_eq!(report.counts.calendars, 1);
+        assert_eq!(report.counts.shape_points, 2);
     }
 
     #[test]
@@ -340,6 +392,27 @@ mod tests {
         assert!(codes.contains("invalid_exception_type"));
         assert!(codes.contains("duplicate_calendar_date"));
         assert!(codes.contains("unknown_service"));
+    }
+
+    #[test]
+    fn validates_shapes_and_trip_references() {
+        let mut feed = archive(&[
+            (
+                "shapes.txt",
+                "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,91.0,5.1,1,-1\nshape-1,52.1,5.2,1,10\n",
+            ),
+            (
+                "trips.txt",
+                "route_id,service_id,trip_id,shape_id\nroute-1,weekday,trip-1,missing-shape\n",
+            ),
+        ]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("invalid_shape_coordinates"));
+        assert!(codes.contains("invalid_shape_distance"));
+        assert!(codes.contains("non_increasing_shape_sequence"));
+        assert!(codes.contains("unknown_shape"));
     }
 
     #[test]

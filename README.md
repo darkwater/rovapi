@@ -52,6 +52,7 @@ Endpoints currently available:
 - `GET /v1/routes/{source_id}/trips?date=2026-09-28&limit=20`
 - `GET /v1/trips/{source_id}`
 - `GET /v1/trips/{source_id}/stops`
+- `GET /v1/trips/{source_id}/shape`
 
 Departure queries use the GTFS service date and service-day time. Hours may
 exceed 23, so a `25:11:00` departure belongs to the requested service date even
@@ -61,6 +62,8 @@ removals from `calendar_dates.txt` are applied.
 Route-trip queries use the same service-date calendar rules. Trip stop calls are
 returned in `stop_sequence` order with both readable GTFS times and their raw
 seconds since the start of the service day.
+When `shapes.txt` is present, trip geometry is returned as ordered latitude and
+longitude points with the optional source distance along the shape.
 
 Readiness returns HTTP 503 until a validated schedule database has been loaded;
 liveness continues to report whether the process itself is running.

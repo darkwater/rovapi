@@ -13,7 +13,8 @@ use crate::gtfs::{GtfsArchive, GtfsDate, GtfsError, GtfsTime, Stop, ValidationRe
 
 const SCHEMA: &str = include_str!("../../migrations/0001_schedule.sql");
 const CALENDAR_SCHEMA: &str = include_str!("../../migrations/0002_calendar.sql");
-const SCHEMA_VERSION: u32 = 2;
+const SHAPE_SCHEMA: &str = include_str!("../../migrations/0003_shapes.sql");
+const SCHEMA_VERSION: u32 = 3;
 const EARTH_RADIUS_METRES: f64 = 6_371_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,6 +96,14 @@ pub struct ScheduledStopCall {
     pub timepoint: Option<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredShapePoint {
+    pub sequence: u32,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub distance_traveled: Option<f64>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ImportSummary {
     pub agencies: u64,
@@ -102,6 +111,7 @@ pub struct ImportSummary {
     pub routes: u64,
     pub calendars: u64,
     pub calendar_dates: u64,
+    pub shape_points: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -133,6 +143,7 @@ pub trait ScheduleRepository {
     ) -> Result<Vec<StoredTrip>, StorageError>;
     fn trip(&self, source_id: &str) -> Result<Option<StoredTrip>, StorageError>;
     fn trip_stops(&self, trip_source_id: &str) -> Result<Vec<ScheduledStopCall>, StorageError>;
+    fn trip_shape(&self, trip_source_id: &str) -> Result<Vec<StoredShapePoint>, StorageError>;
 }
 
 pub struct SqliteStore {
@@ -169,6 +180,7 @@ impl SqliteStore {
         store.configure(true)?;
         store.connection.execute_batch(SCHEMA)?;
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
+        store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -180,6 +192,7 @@ impl SqliteStore {
         store.configure(false)?;
         store.connection.execute_batch(SCHEMA)?;
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
+        store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -337,6 +350,23 @@ impl SqliteStore {
         })?;
         drop(calendar_date_statement);
 
+        let mut shape_statement = transaction.prepare(
+            "INSERT INTO shape_points(
+                shape_source_id, sequence, latitude, longitude, distance_traveled
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        let shape_points = archive.visit_shape_points(|point| {
+            shape_statement.execute(params![
+                point.shape_id,
+                point.shape_pt_sequence,
+                point.shape_pt_lat,
+                point.shape_pt_lon,
+                point.shape_dist_traveled,
+            ])?;
+            Ok::<_, StorageError>(())
+        })?;
+        drop(shape_statement);
+
         let mut trip_ids = HashMap::new();
         let mut trip_statement = transaction.prepare(
             "INSERT INTO trips(
@@ -396,6 +426,7 @@ impl SqliteStore {
             routes,
             calendars,
             calendar_dates,
+            shape_points,
             trips,
             stop_times,
         })
@@ -734,6 +765,25 @@ impl ScheduleRepository for SqliteStore {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    fn trip_shape(&self, trip_source_id: &str) -> Result<Vec<StoredShapePoint>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT point.sequence, point.latitude, point.longitude, point.distance_traveled
+             FROM trips AS trip
+             JOIN shape_points AS point ON point.shape_source_id = trip.shape_source_id
+             WHERE trip.source_id = ?1
+             ORDER BY point.sequence",
+        )?;
+        let rows = statement.query_map([trip_source_id], |row| {
+            Ok(StoredShapePoint {
+                sequence: row.get(0)?,
+                latitude: row.get(1)?,
+                longitude: row.get(2)?,
+                distance_traveled: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 fn insert_gtfs_stop_prepared(
@@ -1012,7 +1062,7 @@ mod tests {
         ),
         (
             "trips.txt",
-            "route_id,service_id,trip_id,trip_headsign\nroute-1,weekday,trip-1,Centraal\n",
+            "route_id,service_id,trip_id,trip_headsign,shape_id\nroute-1,weekday,trip-1,Centraal,shape-1\n",
         ),
         (
             "stop_times.txt",
@@ -1023,6 +1073,10 @@ mod tests {
             "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nweekday,1,1,1,1,1,0,0,20260901,20260930\n",
         ),
         ("calendar_dates.txt", "service_id,date,exception_type\n"),
+        (
+            "shapes.txt",
+            "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,52.0907,5.1214,1,0\nshape-1,52.1000,5.1300,2,1200.5\n",
+        ),
     ];
 
     fn gtfs_archive(overrides: &[(&str, &str)]) -> GtfsArchive<Cursor<Vec<u8>>> {
@@ -1061,7 +1115,7 @@ mod tests {
     #[test]
     fn bundled_sqlite_supports_schema_fts_and_rtree() {
         let mut store = SqliteStore::create_in_memory().unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        assert_eq!(store.schema_version().unwrap(), 3);
         store
             .insert_stop(stop("ut-centraal", "Utrecht Centraal", 52.0893, 5.1103))
             .unwrap();
@@ -1118,6 +1172,7 @@ mod tests {
                 routes: 1,
                 calendars: 1,
                 calendar_dates: 0,
+                shape_points: 2,
                 trips: 1,
                 stop_times: 1,
             }
@@ -1150,6 +1205,9 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].stop.source_id, "stop-1");
         assert_eq!(calls[0].scheduled_arrival.as_deref(), Some("25:10:00"));
+        let shape = store.trip_shape("trip-1").unwrap();
+        assert_eq!(shape.len(), 2);
+        assert_eq!(shape[1].distance_traveled, Some(1200.5));
     }
 
     #[test]
@@ -1273,7 +1331,7 @@ mod tests {
             SqliteStore::open_read_only(database.path()),
             Err(StorageError::UnsupportedSchema {
                 actual: 999,
-                expected: 2
+                expected: 3
             })
         ));
     }
