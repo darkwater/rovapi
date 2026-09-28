@@ -5,6 +5,52 @@ Reviewed: 2026-09-28
 Scope: standalone GTFS ingestion, SQLite storage, Axum API, operational
 behavior, and tests. Findings are ordered by severity within each section.
 
+## Processing status (2026-09-28)
+
+Implemented and verified:
+
+- **H1, M4:** four independent read-only SQLite workers now serve queries, and
+  readiness is derived from the current pool's worker health.
+- **H4, M14:** activation is an explicit, validated, idempotent command;
+  `versions` and JSON `status` commands make installed and active schedules
+  inspectable and support rollback.
+- **H6, R1:** public date parsing is safe for arbitrary UTF-8 input, with
+  regression tests, and runtime `data/` is ignored by Git.
+- **M3:** nearby-search coordinates and radius are checked at the HTTP boundary
+  and return the JSON 400 contract.
+- **M6:** departure responses expose effective pickup, drop-off, and timepoint
+  values; stop calls with explicit `pickup_type=1` are excluded from the
+  boarding-oriented departure list.
+- **M10:** a nonempty `frequencies.txt` is rejected explicitly, preventing a
+  silently incomplete timetable.
+- **L1:** the snapshot parent directory is synced after an atomic rename.
+
+Substantially addressed, with follow-up still useful:
+
+- **H2:** interrupted fetches resume from an existing snapshot and an existing
+  completed database can be activated. Replacing a permanently invalid
+  snapshot under the same immutable version label remains intentionally
+  manual; operators should normally use a new publication label.
+- **M5:** required agency, stop, route, and trip fields plus direction,
+  pickup/drop-off, and timepoint enums are now validated. Full timing-point and
+  every optional-file invariant remain open.
+- **M13:** queued SQLite commands carry deadlines and abandoned responses are
+  skipped; timeout and dead-worker errors have stable HTTP mappings. Router
+  concurrency limits and interruption of a query already executing in SQLite
+  remain open.
+- **M16:** successful HTTP responses now log status/latency at info level, and
+  imports log validation and persistence phase totals and elapsed time.
+  Incremental row-rate reporting during each long phase remains open.
+- **T2:** invalid geographic input and no-pickup behavior now have regression
+  coverage, but the complete extractor/error-contract matrix is still open.
+
+Out of scope by current product decision: **H5**, because private or
+credential-bearing feed sources are not supported.
+
+Still open: **H3**, **M1-M2**, **M7-M9**, **M11-M12**, **M15**, **M17-M18**,
+**T1**, **T3**, and **L2**. The next architectural milestone is in-process
+refresh with atomic reader replacement, followed by retention and provenance.
+
 ## Confirmed strengths
 
 - Schedule construction happens in a private staging database and one SQLite
@@ -104,6 +150,8 @@ state files are created with restrictive permissions where applicable.
 
 Relevant code: `src/main.rs:48-55`, `src/schedule.rs:25-29`,
 `src/schedule.rs:136-185`.
+
+User note: private sources are out of scope
 
 ### H6. A non-ASCII date query can panic during parsing
 
