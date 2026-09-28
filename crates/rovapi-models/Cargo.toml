@@ -6,6 +6,7 @@ rust-version = "1.89"
 description = "Transport-independent wire models for the ROVAPI HTTP API"
 
 [dependencies]
+geo-types = "0.7.20"
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]

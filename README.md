@@ -111,6 +111,8 @@ The workspace contains the transport-independent `rovapi-models` crate. It is
 the source of truth for the server's JSON response bodies and query parameters,
 and provides both `Serialize` and `Deserialize` implementations without
 depending on Axum, Tokio, or a particular HTTP client.
+Geographic models expose `geo-types` points and shape `LineString` conversion;
+as usual for geospatial Rust types, longitude is `x` and latitude is `y`.
 
 ```toml
 [dependencies]

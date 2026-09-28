@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+pub use geo_types::{LineString, Point};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_LIMIT: usize = 20;
@@ -57,6 +58,13 @@ pub struct Stop {
     pub location_type: Option<u8>,
     pub parent_source_id: Option<String>,
     pub platform_code: Option<String>,
+}
+
+impl Stop {
+    /// Returns the WGS84 stop position with longitude as `x` and latitude as `y`.
+    pub fn point(&self) -> Option<Point<f64>> {
+        Some(Point::new(self.longitude?, self.latitude?))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +135,18 @@ pub struct ShapePoint {
     pub distance_traveled: Option<f64>,
 }
 
+impl ShapePoint {
+    /// Returns this WGS84 shape position with longitude as `x` and latitude as `y`.
+    pub fn point(&self) -> Point<f64> {
+        Point::new(self.longitude, self.latitude)
+    }
+}
+
+/// Converts ordered API shape points into a `geo_types::LineString`.
+pub fn shape_line_string(points: &[ShapePoint]) -> LineString<f64> {
+    points.iter().map(ShapePoint::point).collect()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FeedInfo {
     pub publisher_name: String,
@@ -161,6 +181,23 @@ pub struct NearbyStopsQuery {
     pub radius: f64,
     #[serde(default = "default_limit")]
     pub limit: usize,
+}
+
+impl NearbyStopsQuery {
+    /// Creates a nearby-stop query from a WGS84 point.
+    pub fn from_point(point: Point<f64>, radius: f64, limit: usize) -> Self {
+        Self {
+            lat: point.y(),
+            lon: point.x(),
+            radius,
+            limit,
+        }
+    }
+
+    /// Returns the query position with longitude as `x` and latitude as `y`.
+    pub fn point(&self) -> Point<f64> {
+        Point::new(self.lon, self.lat)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -208,5 +245,45 @@ mod tests {
             serde_json::from_str::<ErrorResponse>(&json).unwrap(),
             response
         );
+    }
+
+    #[test]
+    fn geographic_models_use_longitude_as_x_and_latitude_as_y() {
+        let stop = Stop {
+            source_id: "ut".to_owned(),
+            code: None,
+            name: "Utrecht Centraal".to_owned(),
+            latitude: Some(52.0893),
+            longitude: Some(5.1103),
+            location_type: Some(0),
+            parent_source_id: None,
+            platform_code: None,
+        };
+        assert_eq!(stop.point(), Some(Point::new(5.1103, 52.0893)));
+
+        let query = NearbyStopsQuery::from_point(Point::new(5.1103, 52.0893), 1_000.0, 20);
+        assert_eq!(query.point(), Point::new(5.1103, 52.0893));
+        assert_eq!((query.lon, query.lat), (5.1103, 52.0893));
+    }
+
+    #[test]
+    fn shape_points_convert_to_a_line_string() {
+        let points = [
+            ShapePoint {
+                sequence: 1,
+                latitude: 52.0,
+                longitude: 5.0,
+                distance_traveled: Some(0.0),
+            },
+            ShapePoint {
+                sequence: 2,
+                latitude: 53.0,
+                longitude: 6.0,
+                distance_traveled: Some(100.0),
+            },
+        ];
+
+        let line = shape_line_string(&points);
+        assert_eq!(line, LineString::from(vec![(5.0, 52.0), (6.0, 53.0)]));
     }
 }
