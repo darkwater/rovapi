@@ -84,14 +84,19 @@ pub fn validate<R: Read + Seek>(
     }
 
     let mut stop_ids = HashSet::new();
+    let mut stop_hierarchy = HashMap::new();
     report.counts.stops = archive.visit_stops(|stop| {
-        if !stop_ids.insert(stop.stop_id.clone()) {
+        let stop_id = stop.stop_id.clone();
+        if !stop_ids.insert(stop_id.clone()) {
             report.issue(
                 "duplicate_stop",
-                stop.stop_id.clone(),
+                stop_id.clone(),
                 "stop_id occurs more than once".to_owned(),
             );
         }
+        stop_hierarchy
+            .entry(stop_id.clone())
+            .or_insert_with(|| (stop.location_type.unwrap_or(0), stop.parent_station.clone()));
         match (stop.stop_lat, stop.stop_lon) {
             (Some(latitude), Some(longitude))
                 if !(-90.0..=90.0).contains(&latitude)
@@ -99,19 +104,84 @@ pub fn validate<R: Read + Seek>(
             {
                 report.issue(
                     "invalid_coordinates",
-                    stop.stop_id,
+                    stop_id,
                     format!("coordinates are outside WGS84 bounds: {latitude}, {longitude}"),
                 );
             }
             (Some(_), None) | (None, Some(_)) => report.issue(
                 "incomplete_coordinates",
-                stop.stop_id,
+                stop_id,
                 "stop_lat and stop_lon must be supplied together".to_owned(),
             ),
             _ => {}
         }
         Ok::<_, GtfsError>(())
     })?;
+
+    for (stop_id, (location_type, parent_id)) in &stop_hierarchy {
+        if *location_type > 4 {
+            report.issue(
+                "invalid_location_type",
+                stop_id.clone(),
+                format!("location_type {location_type} is not supported by GTFS"),
+            );
+            continue;
+        }
+
+        let required_parent_type = match location_type {
+            0 => None,
+            1 => {
+                if !parent_id.is_empty() {
+                    report.issue(
+                        "unexpected_parent_station",
+                        stop_id.clone(),
+                        "a station must not have a parent_station".to_owned(),
+                    );
+                }
+                continue;
+            }
+            2 | 3 => Some(1),
+            4 => Some(0),
+            _ => unreachable!(),
+        };
+
+        if parent_id.is_empty() {
+            if required_parent_type.is_some() {
+                report.issue(
+                    "missing_parent_station",
+                    stop_id.clone(),
+                    "this location_type requires parent_station".to_owned(),
+                );
+            }
+            continue;
+        }
+        if parent_id == stop_id {
+            report.issue(
+                "self_parent_station",
+                stop_id.clone(),
+                "a stop must not be its own parent_station".to_owned(),
+            );
+            continue;
+        }
+        let Some((parent_type, _)) = stop_hierarchy.get(parent_id) else {
+            report.issue(
+                "unknown_parent_station",
+                stop_id.clone(),
+                format!("parent_station {parent_id:?} does not exist"),
+            );
+            continue;
+        };
+        let expected_parent_type = required_parent_type.unwrap_or(1);
+        if *parent_type != expected_parent_type {
+            report.issue(
+                "invalid_parent_location_type",
+                stop_id.clone(),
+                format!(
+                    "parent_station {parent_id:?} has location_type {parent_type}; expected {expected_parent_type}"
+                ),
+            );
+        }
+    }
 
     let mut route_ids = HashSet::new();
     report.counts.routes = archive.visit_routes(|route| {
@@ -438,6 +508,23 @@ mod tests {
         assert!(codes.contains("unknown_route"));
         assert!(codes.contains("unknown_stop"));
         assert!(codes.contains("non_increasing_stop_sequence"));
+    }
+
+    #[test]
+    fn validates_stop_parent_hierarchy() {
+        let mut feed = archive(&[(
+            "stops.txt",
+            "stop_id,stop_name,location_type,parent_station\nstation,Station,1,\nplatform,Platform,0,station\nentrance,Entrance,2,\nboarding,Boarding,4,station\norphan,Orphan,0,missing\nchild-station,Child station,1,station\nself,Self,0,self\ninvalid,Invalid,9,\n",
+        )]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("missing_parent_station"));
+        assert!(codes.contains("invalid_parent_location_type"));
+        assert!(codes.contains("unknown_parent_station"));
+        assert!(codes.contains("unexpected_parent_station"));
+        assert!(codes.contains("self_parent_station"));
+        assert!(codes.contains("invalid_location_type"));
     }
 
     #[test]
