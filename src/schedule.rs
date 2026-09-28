@@ -296,6 +296,27 @@ impl DataDirectory {
         }
         Ok(Some(active))
     }
+
+    pub fn installed_versions(&self) -> Result<Vec<ScheduleVersion>, ScheduleError> {
+        let mut versions = Vec::new();
+        for entry in fs::read_dir(&self.schedules)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let Some(filename) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some(value) = filename.strip_suffix(".sqlite") else {
+                continue;
+            };
+            if let Ok(version) = ScheduleVersion::parse(value.to_owned()) {
+                versions.push(version);
+            }
+        }
+        versions.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        Ok(versions)
+    }
 }
 
 struct StagingGuard {
@@ -506,6 +527,7 @@ mod tests {
         assert_eq!(summary.stop_times, 1);
         assert!(data.database_path(&version).is_file());
         assert!(!data.staging_path(&version).exists());
+        assert_eq!(data.installed_versions().unwrap(), vec![version.clone()]);
         assert_eq!(data.active().unwrap(), Some(active));
         let store = SqliteStore::open_read_only(data.database_path(&version)).unwrap();
         let metadata = store.schedule_metadata().unwrap();

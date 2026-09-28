@@ -115,6 +115,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
             return Ok(());
         }
+        Command::Versions => {
+            let data_directory = DataDirectory::open(Config::data_directory_from_env())?;
+            let active = data_directory.active()?.map(|active| active.version);
+            for version in data_directory.installed_versions()? {
+                let marker = if active.as_ref() == Some(&version) {
+                    "active"
+                } else {
+                    "installed"
+                };
+                println!("{}\t{marker}", version.as_str());
+            }
+            return Ok(());
+        }
+        Command::Status => {
+            let data_directory = DataDirectory::open(Config::data_directory_from_env())?;
+            let Some(active) = data_directory.active()? else {
+                println!("null");
+                return Ok(());
+            };
+            let reader = SqliteReader::open(data_directory.database_path(&active.version)).await?;
+            let metadata = reader.schedule_metadata().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "active": active,
+                    "metadata": metadata,
+                }))?
+            );
+            return Ok(());
+        }
         Command::Help => {
             print_usage();
             return Ok(());
@@ -150,6 +180,8 @@ enum Command {
     Import { gtfs_zip: PathBuf, version: String },
     Fetch { url: String, version: String },
     Activate { version: String },
+    Versions,
+    Status,
     Help,
 }
 
@@ -187,16 +219,18 @@ fn command_from_args() -> Result<Command, io::Error> {
                 version: version.to_owned(),
             })
         }
+        [command] if command == "versions" => Ok(Command::Versions),
+        [command] if command == "status" => Ok(Command::Status),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version> | activate <version>]",
+            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version> | activate <version> | versions | status]",
         )),
     }
 }
 
 fn print_usage() {
     println!(
-        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n    ovapi activate <version>\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
+        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n    ovapi activate <version>\n    ovapi versions\n    ovapi status\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
     );
 }
 

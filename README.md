@@ -46,6 +46,13 @@ write failure:
 OVAPI_DATA_DIR=./data cargo run -- activate 2026-09-28
 ```
 
+Inspect the installed versions or print the active schedule and feed metadata:
+
+```sh
+OVAPI_DATA_DIR=./data cargo run -- versions
+OVAPI_DATA_DIR=./data cargo run -- status
+```
+
 Then start the server:
 
 ```sh
