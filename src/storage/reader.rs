@@ -55,6 +55,14 @@ enum Command {
         limit: usize,
         response: oneshot::Sender<Result<Vec<NearbyStop>, StorageError>>,
     },
+    StopsInRect {
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<StoredStop>, StorageError>>,
+    },
     ScheduledDepartures {
         stop_source_id: String,
         date: GtfsDate,
@@ -100,6 +108,7 @@ impl Command {
             Self::Stop { response, .. } => response.is_closed(),
             Self::SearchStops { response, .. } => response.is_closed(),
             Self::NearbyStops { response, .. } => response.is_closed(),
+            Self::StopsInRect { response, .. } => response.is_closed(),
             Self::ScheduledDepartures { response, .. } => response.is_closed(),
             Self::Route { response, .. } => response.is_closed(),
             Self::SearchRoutes { response, .. } => response.is_closed(),
@@ -120,6 +129,9 @@ impl Command {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::NearbyStops { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::StopsInRect { response, .. } => {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::ScheduledDepartures { response, .. } => {
@@ -235,6 +247,22 @@ impl SqliteReader {
                                     latitude,
                                     longitude,
                                     radius_metres,
+                                    limit,
+                                ));
+                            }
+                            Command::StopsInRect {
+                                min_latitude,
+                                min_longitude,
+                                max_latitude,
+                                max_longitude,
+                                limit,
+                                response,
+                            } => {
+                                let _ = response.send(store.stops_in_rect(
+                                    min_latitude,
+                                    min_longitude,
+                                    max_latitude,
+                                    max_longitude,
                                     limit,
                                 ));
                             }
@@ -377,6 +405,25 @@ impl SqliteReader {
             latitude,
             longitude,
             radius_metres,
+            limit,
+            response,
+        })
+        .await
+    }
+
+    pub async fn stops_in_rect(
+        &self,
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+    ) -> Result<Vec<StoredStop>, StorageError> {
+        self.execute(move |response| Command::StopsInRect {
+            min_latitude,
+            min_longitude,
+            max_latitude,
+            max_longitude,
             limit,
             response,
         })

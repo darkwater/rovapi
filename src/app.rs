@@ -13,7 +13,7 @@ use tracing::Level;
 use crate::{
     api::routes::{get_route, route_trips, search_routes},
     api::schedule::get_schedule_metadata,
-    api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops},
+    api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops, stops_in_rect},
     api::trips::{get_trip, trip_shape, trip_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedule", get(get_schedule_metadata))
         .route("/v1/stops", get(search_stops))
         .route("/v1/stops/nearby", get(nearby_stops))
+        .route("/v1/stops/in-rect", get(stops_in_rect))
         .route("/v1/stops/:id/departures", get(scheduled_departures))
         .route("/v1/stops/:id", get(get_stop))
         .route("/v1/routes", get(search_routes))
@@ -281,6 +282,24 @@ mod tests {
             "/v1/stops/nearby?lat=91&lon=5.12&radius=1000",
             "/v1/stops/nearby?lat=52.09&lon=181&radius=1000",
             "/v1/stops/nearby?lat=52.09&lon=5.12&radius=100001",
+        ] {
+            let response = router(AppState::new())
+                .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["error"]["code"], "bad_request");
+        }
+    }
+
+    #[tokio::test]
+    async fn rectangle_stop_query_rejects_invalid_bounds_before_schedule_access() {
+        for uri in [
+            "/v1/stops/in-rect?min_lat=53&min_lon=4&max_lat=52&max_lon=5",
+            "/v1/stops/in-rect?min_lat=52&min_lon=4&max_lat=53&max_lon=181",
+            "/v1/stops/in-rect?min_lat=52&min_lon=4&max_lat=53&max_lon=5&limit=25001",
         ] {
             let response = router(AppState::new())
                 .oneshot(Request::get(uri).body(Body::empty()).unwrap())

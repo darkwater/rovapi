@@ -60,6 +60,14 @@ pub trait ScheduleRepository {
         radius_metres: f64,
         limit: usize,
     ) -> Result<Vec<NearbyStop>, StorageError>;
+    fn stops_in_rect(
+        &self,
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+    ) -> Result<Vec<StoredStop>, StorageError>;
     fn scheduled_departures(
         &self,
         stop_source_id: &str,
@@ -91,6 +99,7 @@ pub enum StorageError {
     InvalidCoordinate,
     InvalidReaderPoolSize,
     InvalidRadius,
+    InvalidRectangle,
     Integrity(String),
     InvalidReference {
         entity: &'static str,
@@ -572,6 +581,43 @@ impl ScheduleRepository for SqliteStore {
         Ok(nearby)
     }
 
+    fn stops_in_rect(
+        &self,
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+    ) -> Result<Vec<StoredStop>, StorageError> {
+        validate_coordinates(Some(min_latitude), Some(min_longitude))?;
+        validate_coordinates(Some(max_latitude), Some(max_longitude))?;
+        if min_latitude > max_latitude || min_longitude > max_longitude {
+            return Err(StorageError::InvalidRectangle);
+        }
+
+        let mut statement = self.connection.prepare(
+            "SELECT s.source_id, s.code, s.name, s.latitude, s.longitude,
+                    s.location_type, s.parent_source_id, s.platform_code
+             FROM stop_spatial AS spatial
+             JOIN stops AS s ON s.id = spatial.stop_id
+             WHERE spatial.max_latitude >= ?1 AND spatial.min_latitude <= ?2
+               AND spatial.max_longitude >= ?3 AND spatial.min_longitude <= ?4
+             ORDER BY s.source_id
+             LIMIT ?5",
+        )?;
+        let rows = statement.query_map(
+            params![
+                min_latitude,
+                max_latitude,
+                min_longitude,
+                max_longitude,
+                bounded_rect_limit(limit),
+            ],
+            map_stop,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     fn scheduled_departures(
         &self,
         stop_source_id: &str,
@@ -1010,6 +1056,10 @@ fn bounded_limit(limit: usize) -> i64 {
     limit.clamp(1, 100) as i64
 }
 
+fn bounded_rect_limit(limit: usize) -> i64 {
+    limit.clamp(1, rovapi_models::MAX_RECT_STOPS_LIMIT) as i64
+}
+
 fn fts_prefix_query(query: &str) -> Option<String> {
     let terms: Vec<_> = query
         .split_whitespace()
@@ -1042,6 +1092,7 @@ impl fmt::Display for StorageError {
                 )
             }
             Self::InvalidRadius => write!(formatter, "radius must be between 0 and 100000 metres"),
+            Self::InvalidRectangle => write!(formatter, "rectangle bounds are reversed"),
             Self::QueryTimedOut => write!(formatter, "SQLite query timed out while queued"),
             Self::Integrity(message) => {
                 write!(formatter, "SQLite integrity check failed: {message}")
@@ -1232,6 +1283,26 @@ mod tests {
 
         let nearby = store.nearby_stops(52.09, 5.10, 1_000.0, 10).unwrap();
         assert!(nearby.is_empty());
+    }
+
+    #[test]
+    fn rectangle_query_returns_bulk_results_in_stable_order() {
+        let mut store = SqliteStore::create_in_memory().unwrap();
+        for number in (0..150).rev() {
+            let id = format!("stop-{number:03}");
+            store
+                .insert_stop(stop(&id, &id, 52.0 + f64::from(number) / 10_000.0, 5.0))
+                .unwrap();
+        }
+
+        let stops = store.stops_in_rect(51.9, 4.9, 52.1, 5.1, 150).unwrap();
+        assert_eq!(stops.len(), 150);
+        assert_eq!(stops.first().unwrap().source_id, "stop-000");
+        assert_eq!(stops.last().unwrap().source_id, "stop-149");
+        assert!(matches!(
+            store.stops_in_rect(53.0, 4.0, 52.0, 5.0, 20),
+            Err(StorageError::InvalidRectangle)
+        ));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use rovapi::{
     storage::SqliteReader,
 };
 use rovapi_models::{
-    ReadyResponse, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
+    ReadyResponse, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint, Stop,
 };
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
@@ -107,6 +107,15 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
         schedule.feed.unwrap().source_version.as_deref(),
         Some("fixture-2026-09")
     );
+
+    let rectangle_stops: Vec<Stop> = json(
+        app.clone(),
+        "/v1/stops/in-rect?min_lat=52.08&min_lon=5.10&max_lat=52.10&max_lon=5.12",
+    )
+    .await;
+    assert_eq!(rectangle_stops.len(), 3);
+    assert_eq!(rectangle_stops[0].source_id, "platform-a");
+    assert_eq!(rectangle_stops[2].source_id, "station-ut");
 
     let removed: Vec<ScheduledDeparture> = json(
         app.clone(),

@@ -6,11 +6,13 @@
 
 use std::{borrow::Borrow, collections::BTreeMap, fmt};
 
-pub use geo_types::{LineString, Point};
+pub use geo_types::{LineString, Point, Rect};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_LIMIT: usize = 20;
 pub const MAX_LIMIT: usize = 100;
+pub const DEFAULT_RECT_STOPS_LIMIT: usize = 10_000;
+pub const MAX_RECT_STOPS_LIMIT: usize = 25_000;
 
 pub mod error_code {
     pub const BAD_REQUEST: &str = "bad_request";
@@ -23,6 +25,10 @@ pub mod error_code {
 
 const fn default_limit() -> usize {
     DEFAULT_LIMIT
+}
+
+const fn default_rect_stops_limit() -> usize {
+    DEFAULT_RECT_STOPS_LIMIT
 }
 
 macro_rules! id_type {
@@ -278,6 +284,34 @@ impl NearbyStopsQuery {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StopsInRectQuery {
+    pub min_lat: f64,
+    pub min_lon: f64,
+    pub max_lat: f64,
+    pub max_lon: f64,
+    #[serde(default = "default_rect_stops_limit")]
+    pub limit: usize,
+}
+
+impl StopsInRectQuery {
+    /// Creates a stop query from a WGS84 rectangle.
+    pub fn from_rect(rect: Rect<f64>, limit: usize) -> Self {
+        Self {
+            min_lat: rect.min().y,
+            min_lon: rect.min().x,
+            max_lat: rect.max().y,
+            max_lon: rect.max().x,
+            limit,
+        }
+    }
+
+    /// Returns the WGS84 rectangle with longitude as `x` and latitude as `y`.
+    pub fn rect(&self) -> Rect<f64> {
+        Rect::new((self.min_lon, self.min_lat), (self.max_lon, self.max_lat))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeparturesQuery {
     pub date: String,
@@ -319,6 +353,11 @@ mod tests {
     fn query_models_apply_the_server_default_limit() {
         let query: StopSearchQuery = serde_json::from_str(r#"{"query":"centraal"}"#).unwrap();
         assert_eq!(query.limit, 20);
+
+        let query: StopsInRectQuery =
+            serde_json::from_str(r#"{"min_lat":51.0,"min_lon":4.0,"max_lat":53.0,"max_lon":6.0}"#)
+                .unwrap();
+        assert_eq!(query.limit, DEFAULT_RECT_STOPS_LIMIT);
     }
 
     #[test]
@@ -353,6 +392,11 @@ mod tests {
         let query = NearbyStopsQuery::from_point(Point::new(5.1103, 52.0893), 1_000.0, 20);
         assert_eq!(query.point(), Point::new(5.1103, 52.0893));
         assert_eq!((query.lon, query.lat), (5.1103, 52.0893));
+
+        let rect = Rect::new((4.0, 51.0), (6.0, 53.0));
+        let query = StopsInRectQuery::from_rect(rect, DEFAULT_RECT_STOPS_LIMIT);
+        assert_eq!(query.rect(), rect);
+        assert_eq!(query.limit, 10_000);
     }
 
     #[test]
