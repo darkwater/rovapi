@@ -24,7 +24,10 @@ OVAPI_DATA_DIR=./data cargo run -- fetch \
 The fetch command streams into a snapshot with a 1 GiB compressed-size limit,
 then validates and activates it. Successful response validators are persisted;
 subsequent fetches for the same URL send `If-None-Match` and
-`If-Modified-Since`, avoiding another import after HTTP 304.
+`If-Modified-Since`, avoiding another import after HTTP 304. Use a new version
+label when checking for a new immutable feed publication. If a fetch was
+interrupted during import, rerunning it with the same version resumes from the
+completed local snapshot rather than downloading it again.
 
 For a GTFS ZIP already on disk:
 
@@ -35,6 +38,13 @@ OVAPI_DATA_DIR=./data cargo run -- import ./gtfs.zip 2026-09-28
 The import validates the archive, builds SQLite transactionally, checks the
 finished database, and atomically updates `active.json`. Run imports while the
 server is stopped; the data-directory lock prevents simultaneous writers.
+
+To roll back to an installed version, or finish activation after a metadata
+write failure:
+
+```sh
+OVAPI_DATA_DIR=./data cargo run -- activate 2026-09-28
+```
 
 Then start the server:
 

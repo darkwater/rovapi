@@ -43,8 +43,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Fetch { url, version } => {
             let version = ScheduleVersion::parse(version)?;
             let data_directory = DataDirectory::open(Config::data_directory_from_env())?;
-            let validators = data_directory.download_validators(&url)?;
             let snapshot = data_directory.snapshot_path(&version);
+            let database = data_directory.database_path(&version);
+
+            if database.is_file() {
+                let active = data_directory.activate(&version)?;
+                info!(
+                    version = active.version.as_str(),
+                    path = %database.display(),
+                    "existing GTFS schedule activated"
+                );
+                return Ok(());
+            }
+            if snapshot.is_file() {
+                info!(
+                    %url,
+                    version = version.as_str(),
+                    path = %snapshot.display(),
+                    "resuming GTFS import from existing snapshot"
+                );
+                let file = File::open(&snapshot)?;
+                let (active, summary) =
+                    data_directory.import_and_activate(&version, file, ImportLimits::default())?;
+                info!(
+                    version = active.version.as_str(),
+                    stops = summary.stops,
+                    routes = summary.routes,
+                    trips = summary.trips,
+                    stop_times = summary.stop_times,
+                    "existing GTFS snapshot imported and activated"
+                );
+                return Ok(());
+            }
+
+            let validators = data_directory.download_validators(&url)?;
             info!(%url, version = version.as_str(), "checking GTFS feed");
             let downloader = FeedDownloader::new(1024 * 1024 * 1024)?;
             match downloader.download(&url, &snapshot, &validators).await? {
@@ -70,6 +102,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     );
                 }
             }
+            return Ok(());
+        }
+        Command::Activate { version } => {
+            let version = ScheduleVersion::parse(version)?;
+            let data_directory = DataDirectory::open(Config::data_directory_from_env())?;
+            let active = data_directory.activate(&version)?;
+            info!(
+                version = active.version.as_str(),
+                path = %data_directory.database_path(&version).display(),
+                "GTFS schedule activated"
+            );
             return Ok(());
         }
         Command::Help => {
@@ -106,6 +149,7 @@ enum Command {
     Serve,
     Import { gtfs_zip: PathBuf, version: String },
     Fetch { url: String, version: String },
+    Activate { version: String },
     Help,
 }
 
@@ -135,16 +179,24 @@ fn command_from_args() -> Result<Command, io::Error> {
                 version: version.to_owned(),
             })
         }
+        [command, version] if command == "activate" => {
+            let version = version.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "version must be valid UTF-8")
+            })?;
+            Ok(Command::Activate {
+                version: version.to_owned(),
+            })
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version>]",
+            "usage: ovapi [import <gtfs.zip> <version> | fetch <url> <version> | activate <version>]",
         )),
     }
 }
 
 fn print_usage() {
     println!(
-        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
+        "ovapi\n\nUSAGE:\n    ovapi\n    ovapi import <gtfs.zip> <version>\n    ovapi fetch <url> <version>\n    ovapi activate <version>\n\nENVIRONMENT:\n    OVAPI_DATA_DIR       Data directory (default: data)\n    OVAPI_BIND_ADDRESS   Listen address (default: 127.0.0.1:3000)\n    RUST_LOG             Tracing filter"
     );
 }
 
