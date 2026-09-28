@@ -47,8 +47,9 @@ Substantially addressed, with follow-up still useful:
   `rovapi-models` crate and are shared by server and consumers. Agency, stop,
   route, trip, service, and shape IDs are distinct transparent newtypes, also
   used for HTTP path extraction. The current v1 fields still expose
-  source-native identifiers and numeric GTFS concepts; introducing namespaces,
-  canonical IDs, and enums remains open (**M2**).
+  source-native identifiers and some numeric GTFS concepts; `location_type` is
+  now a checked enum, while introducing namespaces, canonical IDs, and the
+  remaining enums remains open (**M2**).
 
 Out of scope by current product decision: **H5**, because private or
 credential-bearing feed sources are not supported.

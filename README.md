@@ -122,6 +122,8 @@ as usual for geospatial Rust types, longitude is `x` and latitude is `y`.
 Agency, stop, route, trip, service, and shape identifiers are distinct
 string-backed newtypes, preventing IDs for different entities from being mixed
 while preserving string values in JSON.
+Stop location types use the `LocationType` enum while retaining GTFS numeric
+values `0` through `4` in JSON.
 
 ```toml
 [dependencies]

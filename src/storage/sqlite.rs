@@ -7,12 +7,14 @@ use std::{
 };
 
 use rovapi_models::{
-    AgencyId, FeedInfo as StoredFeedInfo, NearbyStop, Route as StoredRoute, RouteId,
+    AgencyId, FeedInfo as StoredFeedInfo, LocationType, NearbyStop, Route as StoredRoute, RouteId,
     ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ServiceId,
     ShapeId, ShapePoint as StoredShapePoint, Stop as StoredStop, StopId, Trip as StoredTrip,
     TripId,
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Statement, Transaction, params, types::Type,
+};
 
 use crate::gtfs::{GtfsArchive, GtfsDate, GtfsError, GtfsTime, Stop, ValidationReport, validate};
 
@@ -994,9 +996,16 @@ fn map_stop(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredStop> {
         name: row.get(2)?,
         latitude: row.get(3)?,
         longitude: row.get(4)?,
-        location_type: row.get(5)?,
+        location_type: map_location_type(row, 5)?,
         parent_source_id: row.get::<_, Option<String>>(6)?.map(StopId::from),
         platform_code: row.get(7)?,
+    })
+}
+
+fn map_location_type(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LocationType> {
+    let value = row.get::<_, Option<u8>>(index)?.unwrap_or_default();
+    LocationType::try_from(value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Integer, Box::new(error))
     })
 }
 
@@ -1340,7 +1349,9 @@ mod tests {
                 stop_times: 1,
             }
         );
-        assert_eq!(store.stop("stop-1").unwrap().unwrap().name, "Centraal");
+        let imported_stop = store.stop("stop-1").unwrap().unwrap();
+        assert_eq!(imported_stop.name, "Centraal");
+        assert_eq!(imported_stop.location_type, LocationType::StopOrPlatform);
         let departure: u32 = store
             .connection
             .query_row(

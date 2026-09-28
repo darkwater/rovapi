@@ -20,7 +20,7 @@ CREATE TABLE stops (
     name                TEXT NOT NULL,
     latitude            REAL,
     longitude           REAL,
-    location_type       INTEGER,
+    location_type       INTEGER CHECK (location_type BETWEEN 0 AND 4),
     parent_source_id    TEXT,
     platform_code       TEXT,
     CHECK ((latitude IS NULL) = (longitude IS NULL)),

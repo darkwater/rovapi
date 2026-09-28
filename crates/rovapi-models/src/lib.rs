@@ -109,6 +109,74 @@ id_type!(ShapeId, "shape");
 id_type!(StopId, "stop");
 id_type!(TripId, "trip");
 
+/// GTFS location hierarchy type, encoded as its standard numeric value in JSON.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum LocationType {
+    #[default]
+    StopOrPlatform = 0,
+    Station = 1,
+    EntranceOrExit = 2,
+    GenericNode = 3,
+    BoardingArea = 4,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidLocationType(u8);
+
+impl InvalidLocationType {
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl fmt::Display for InvalidLocationType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid GTFS location_type {}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidLocationType {}
+
+impl TryFrom<u8> for LocationType {
+    type Error = InvalidLocationType;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::StopOrPlatform),
+            1 => Ok(Self::Station),
+            2 => Ok(Self::EntranceOrExit),
+            3 => Ok(Self::GenericNode),
+            4 => Ok(Self::BoardingArea),
+            value => Err(InvalidLocationType(value)),
+        }
+    }
+}
+
+impl From<LocationType> for u8 {
+    fn from(value: LocationType) -> Self {
+        value as Self
+    }
+}
+
+impl Serialize for LocationType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u8((*self).into())
+    }
+}
+
+impl<'de> Deserialize<'de> for LocationType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::try_from(u8::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -139,7 +207,7 @@ pub struct Stop {
     pub name: String,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
-    pub location_type: Option<u8>,
+    pub location_type: LocationType,
     pub parent_source_id: Option<StopId>,
     pub platform_code: Option<String>,
 }
@@ -350,6 +418,21 @@ mod tests {
     }
 
     #[test]
+    fn location_types_use_gtfs_numeric_values_on_the_wire() {
+        let json = serde_json::to_string(&LocationType::Station).unwrap();
+        assert_eq!(json, "1");
+        assert_eq!(
+            serde_json::from_str::<LocationType>(&json).unwrap(),
+            LocationType::Station
+        );
+        assert!(serde_json::from_str::<LocationType>("5").is_err());
+        assert_eq!(
+            LocationType::try_from(4).unwrap(),
+            LocationType::BoardingArea
+        );
+    }
+
+    #[test]
     fn query_models_apply_the_server_default_limit() {
         let query: StopSearchQuery = serde_json::from_str(r#"{"query":"centraal"}"#).unwrap();
         assert_eq!(query.limit, 20);
@@ -383,7 +466,7 @@ mod tests {
             name: "Utrecht Centraal".to_owned(),
             latitude: Some(52.0893),
             longitude: Some(5.1103),
-            location_type: Some(0),
+            location_type: LocationType::StopOrPlatform,
             parent_source_id: None,
             platform_code: None,
         };
