@@ -1,0 +1,3 @@
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,timepoint
+trip-late,25:10:00,25:11:00,platform-a,1,1
+trip-late,25:20:00,25:20:00,platform-b,2,1

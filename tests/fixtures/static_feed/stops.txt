@@ -1,0 +1,4 @@
+stop_id,stop_code,stop_name,stop_lat,stop_lon,location_type,parent_station,platform_code
+station-ut,UT,Utrecht Teststation,52.0893,5.1103,1,,
+platform-a,UTA,Utrecht Teststation A,52.0894,5.1104,0,station-ut,A
+platform-b,UTB,Utrecht Teststation B,52.0892,5.1102,0,station-ut,B

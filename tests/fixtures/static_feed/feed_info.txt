@@ -1,0 +1,2 @@
+feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version,feed_contact_email
+Example Publisher,https://example.nl,nl,20260901,20261031,fixture-2026-09,data@example.nl
