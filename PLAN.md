@@ -218,7 +218,7 @@ headers. Geographic vehicle queries require a bounded viewport.
 - [x] Atomic core GTFS-to-SQLite import transaction
 - [x] Mandatory validation before import and prepared bulk inserts
 - [x] Integrity check, WAL checkpoint, and schema check before activation
-- [ ] Versioned database-file build, validation, and atomic activation
+- [x] Versioned database-file installation, validation, and atomic activation
 - [ ] Stop search, nearby stops, routes, trips, and scheduled departures
 - [ ] Representative fixtures and integration tests
 
