@@ -9,9 +9,11 @@ use serde::Deserialize;
 use crate::{
     AppState,
     error::ApiError,
-    gtfs::{GtfsDate, GtfsTime},
+    gtfs::GtfsTime,
     storage::{NearbyStop, ScheduledDeparture, StoredStop},
 };
+
+use super::{default_limit, parse_service_date, validate_limit};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SearchQuery {
@@ -35,10 +37,6 @@ pub(crate) struct DeparturesQuery {
     after: String,
     #[serde(default = "default_limit")]
     limit: usize,
-}
-
-const fn default_limit() -> usize {
-    20
 }
 
 pub(crate) async fn get_stop(
@@ -89,8 +87,7 @@ pub(crate) async fn scheduled_departures(
 ) -> Result<Json<Vec<ScheduledDeparture>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;
     validate_limit(query.limit)?;
-    let date = GtfsDate::parse_iso(&query.date)
-        .map_err(|_| ApiError::bad_request("date must use YYYY-MM-DD"))?;
+    let date = parse_service_date(&query.date)?;
     let after: GtfsTime = query
         .after
         .parse()
@@ -110,11 +107,4 @@ pub(crate) async fn scheduled_departures(
         .await
         .map_err(ApiError::storage)?;
     Ok(Json(departures))
-}
-
-fn validate_limit(limit: usize) -> Result<(), ApiError> {
-    if !(1..=100).contains(&limit) {
-        return Err(ApiError::bad_request("limit must be between 1 and 100"));
-    }
-    Ok(())
 }

@@ -224,7 +224,7 @@ headers. Geographic vehicle queries require a bounded viewport.
 - [x] Versioned database-file installation, validation, and atomic activation
 - [x] Stop lookup, search, and nearby-stop API endpoints
 - [x] Calendar-aware scheduled departure API endpoint
-- [ ] Route and trip API endpoints
+- [x] Route lookup/search, calendar-filtered route trips, and trip-stop endpoints
 - [ ] Representative fixtures and integration tests
 
 ### M2 — realtime MVP

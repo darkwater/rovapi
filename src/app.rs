@@ -13,7 +13,9 @@ use tower_http::{
 };
 
 use crate::{
+    api::routes::{get_route, route_trips, search_routes},
     api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops},
+    api::trips::{get_trip, trip_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
     storage::SqliteReader,
@@ -73,6 +75,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/stops/nearby", get(nearby_stops))
         .route("/v1/stops/:id/departures", get(scheduled_departures))
         .route("/v1/stops/:id", get(get_stop))
+        .route("/v1/routes", get(search_routes))
+        .route("/v1/routes/:id/trips", get(route_trips))
+        .route("/v1/routes/:id", get(get_route))
+        .route("/v1/trips/:id/stops", get(trip_stops))
+        .route("/v1/trips/:id", get(get_trip))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(Arc::new(state))
@@ -287,7 +294,9 @@ mod tests {
         store.prepare_for_activation().unwrap();
         let reader = SqliteReader::open(&path).await.unwrap();
 
-        let response = router(AppState::with_schedule(reader))
+        let app = router(AppState::with_schedule(reader));
+        let response = app
+            .clone()
             .oneshot(
                 Request::get("/v1/stops?query=utrecht")
                     .body(Body::empty())
@@ -315,7 +324,9 @@ mod tests {
         store.prepare_for_activation().unwrap();
         let reader = SqliteReader::open(&path).await.unwrap();
 
-        let response = router(AppState::with_schedule(reader))
+        let app = router(AppState::with_schedule(reader));
+        let response = app
+            .clone()
             .oneshot(
                 Request::get("/v1/stops/stop-1/departures?date=2026-09-28&after=25:00:00&limit=10")
                     .body(Body::empty())
@@ -328,6 +339,66 @@ mod tests {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json[0]["trip_id"], "trip-1");
         assert_eq!(json[0]["service_date"], "2026-09-28");
+        assert_eq!(json[0]["scheduled_departure"], "25:11:00");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/routes/route-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json["short_name"], "8");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/routes?query=8")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json[0]["source_id"], "route-1");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/routes/route-1/trips?date=2026-09-28")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json[0]["source_id"], "trip-1");
+
+        let response = app
+            .oneshot(
+                Request::get("/v1/trips/trip-1/stops")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json[0]["stop"]["source_id"], "stop-1");
         assert_eq!(json[0]["scheduled_departure"], "25:11:00");
 
         let _ = fs::remove_file(path);

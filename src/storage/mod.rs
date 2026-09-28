@@ -3,6 +3,6 @@ mod sqlite;
 
 pub use reader::SqliteReader;
 pub use sqlite::{
-    ImportSummary, NearbyStop, ScheduledDeparture, SqliteStore, StopInput, StopRepository,
-    StorageError, StoredStop,
+    ImportSummary, NearbyStop, ScheduleRepository, ScheduledDeparture, ScheduledStopCall,
+    SqliteStore, StopInput, StorageError, StoredRoute, StoredStop, StoredTrip,
 };

@@ -59,6 +59,42 @@ pub struct ScheduledDeparture {
     pub scheduled_departure_seconds: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredRoute {
+    pub source_id: String,
+    pub agency_source_id: Option<String>,
+    pub short_name: Option<String>,
+    pub long_name: Option<String>,
+    pub route_type: u16,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredTrip {
+    pub source_id: String,
+    pub route_id: String,
+    pub service_id: String,
+    pub headsign: Option<String>,
+    pub short_name: Option<String>,
+    pub direction_id: Option<u8>,
+    pub shape_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ScheduledStopCall {
+    pub stop: StoredStop,
+    pub stop_sequence: u32,
+    pub scheduled_arrival: Option<String>,
+    pub scheduled_arrival_seconds: Option<u32>,
+    pub scheduled_departure: Option<String>,
+    pub scheduled_departure_seconds: Option<u32>,
+    pub headsign: Option<String>,
+    pub pickup_type: Option<u8>,
+    pub drop_off_type: Option<u8>,
+    pub timepoint: Option<u8>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ImportSummary {
     pub agencies: u64,
@@ -70,7 +106,7 @@ pub struct ImportSummary {
     pub stop_times: u64,
 }
 
-pub trait StopRepository {
+pub trait ScheduleRepository {
     fn stop(&self, source_id: &str) -> Result<Option<StoredStop>, StorageError>;
     fn search_stops(&self, query: &str, limit: usize) -> Result<Vec<StoredStop>, StorageError>;
     fn nearby_stops(
@@ -87,6 +123,16 @@ pub trait StopRepository {
         after: GtfsTime,
         limit: usize,
     ) -> Result<Vec<ScheduledDeparture>, StorageError>;
+    fn route(&self, source_id: &str) -> Result<Option<StoredRoute>, StorageError>;
+    fn search_routes(&self, query: &str, limit: usize) -> Result<Vec<StoredRoute>, StorageError>;
+    fn route_trips(
+        &self,
+        route_source_id: &str,
+        date: GtfsDate,
+        limit: usize,
+    ) -> Result<Vec<StoredTrip>, StorageError>;
+    fn trip(&self, source_id: &str) -> Result<Option<StoredTrip>, StorageError>;
+    fn trip_stops(&self, trip_source_id: &str) -> Result<Vec<ScheduledStopCall>, StorageError>;
 }
 
 pub struct SqliteStore {
@@ -395,7 +441,7 @@ impl SqliteStore {
     }
 }
 
-impl StopRepository for SqliteStore {
+impl ScheduleRepository for SqliteStore {
     fn stop(&self, source_id: &str) -> Result<Option<StoredStop>, StorageError> {
         Ok(self
             .connection
@@ -553,6 +599,141 @@ impl StopRepository for SqliteStore {
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    fn route(&self, source_id: &str) -> Result<Option<StoredRoute>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT source_id, agency_source_id, short_name, long_name,
+                        route_type, color, text_color
+                 FROM routes WHERE source_id = ?1",
+                [source_id],
+                map_route,
+            )
+            .optional()?)
+    }
+
+    fn search_routes(&self, query: &str, limit: usize) -> Result<Vec<StoredRoute>, StorageError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT source_id, agency_source_id, short_name, long_name,
+                    route_type, color, text_color
+             FROM routes
+             WHERE instr(lower(source_id), lower(?1)) > 0
+                OR instr(lower(COALESCE(short_name, '')), lower(?1)) > 0
+                OR instr(lower(COALESCE(long_name, '')), lower(?1)) > 0
+             ORDER BY CASE WHEN lower(short_name) = lower(?1) THEN 0 ELSE 1 END,
+                      short_name, long_name, source_id
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![query, bounded_limit(limit)], map_route)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn route_trips(
+        &self,
+        route_source_id: &str,
+        date: GtfsDate,
+        limit: usize,
+    ) -> Result<Vec<StoredTrip>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT t.source_id, r.source_id, t.service_source_id, t.headsign,
+                    t.short_name, t.direction_id, t.shape_source_id
+             FROM trips AS t
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE r.source_id = ?1
+               AND (
+                   EXISTS (
+                       SELECT 1 FROM service_exceptions AS added
+                       WHERE added.service_source_id = t.service_source_id
+                         AND added.date = ?2 AND added.exception_type = 1
+                   )
+                   OR (
+                       EXISTS (
+                           SELECT 1 FROM service_calendars AS calendar
+                           WHERE calendar.service_source_id = t.service_source_id
+                             AND ?2 BETWEEN calendar.start_date AND calendar.end_date
+                             AND CASE ?3
+                                 WHEN 0 THEN calendar.sunday
+                                 WHEN 1 THEN calendar.monday
+                                 WHEN 2 THEN calendar.tuesday
+                                 WHEN 3 THEN calendar.wednesday
+                                 WHEN 4 THEN calendar.thursday
+                                 WHEN 5 THEN calendar.friday
+                                 WHEN 6 THEN calendar.saturday
+                             END = 1
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM service_exceptions AS removed
+                           WHERE removed.service_source_id = t.service_source_id
+                             AND removed.date = ?2 AND removed.exception_type = 2
+                       )
+                   )
+               )
+             ORDER BY t.source_id
+             LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                route_source_id,
+                date.compact(),
+                date.weekday() as u8,
+                bounded_limit(limit),
+            ],
+            map_trip,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn trip(&self, source_id: &str) -> Result<Option<StoredTrip>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT t.source_id, r.source_id, t.service_source_id, t.headsign,
+                        t.short_name, t.direction_id, t.shape_source_id
+                 FROM trips AS t
+                 JOIN routes AS r ON r.id = t.route_id
+                 WHERE t.source_id = ?1",
+                [source_id],
+                map_trip,
+            )
+            .optional()?)
+    }
+
+    fn trip_stops(&self, trip_source_id: &str) -> Result<Vec<ScheduledStopCall>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.source_id, s.code, s.name, s.latitude, s.longitude,
+                    s.location_type, s.parent_source_id, s.platform_code,
+                    st.stop_sequence, st.arrival_service_seconds,
+                    st.departure_service_seconds, st.stop_headsign,
+                    st.pickup_type, st.drop_off_type, st.timepoint
+             FROM trips AS t
+             JOIN stop_times AS st ON st.trip_id = t.id
+             JOIN stops AS s ON s.id = st.stop_id
+             WHERE t.source_id = ?1
+             ORDER BY st.stop_sequence",
+        )?;
+        let rows = statement.query_map([trip_source_id], |row| {
+            let arrival_seconds = row.get(9)?;
+            let departure_seconds = row.get(10)?;
+            Ok(ScheduledStopCall {
+                stop: map_stop(row)?,
+                stop_sequence: row.get(8)?,
+                scheduled_arrival: format_optional_gtfs_time(arrival_seconds),
+                scheduled_arrival_seconds: arrival_seconds,
+                scheduled_departure: format_optional_gtfs_time(departure_seconds),
+                scheduled_departure_seconds: departure_seconds,
+                headsign: row.get(11)?,
+                pickup_type: row.get(12)?,
+                drop_off_type: row.get(13)?,
+                timepoint: row.get(14)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 fn insert_gtfs_stop_prepared(
@@ -655,6 +836,34 @@ fn map_stop(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredStop> {
         parent_source_id: row.get(6)?,
         platform_code: row.get(7)?,
     })
+}
+
+fn map_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRoute> {
+    Ok(StoredRoute {
+        source_id: row.get(0)?,
+        agency_source_id: row.get(1)?,
+        short_name: row.get(2)?,
+        long_name: row.get(3)?,
+        route_type: row.get(4)?,
+        color: row.get(5)?,
+        text_color: row.get(6)?,
+    })
+}
+
+fn map_trip(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTrip> {
+    Ok(StoredTrip {
+        source_id: row.get(0)?,
+        route_id: row.get(1)?,
+        service_id: row.get(2)?,
+        headsign: row.get(3)?,
+        short_name: row.get(4)?,
+        direction_id: row.get(5)?,
+        shape_id: row.get(6)?,
+    })
+}
+
+fn format_optional_gtfs_time(seconds: Option<u32>) -> Option<String> {
+    seconds.map(|seconds| GtfsTime::from_seconds(seconds).to_string())
 }
 
 fn validate_coordinates(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), StorageError> {
@@ -923,6 +1132,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(departure, 90_660);
+        assert_eq!(
+            store
+                .route("route-1")
+                .unwrap()
+                .unwrap()
+                .short_name
+                .as_deref(),
+            Some("8")
+        );
+        assert_eq!(
+            store.search_routes("8", 20).unwrap()[0].source_id,
+            "route-1"
+        );
+        assert_eq!(store.trip("trip-1").unwrap().unwrap().route_id, "route-1");
+        let calls = store.trip_stops("trip-1").unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].stop.source_id, "stop-1");
+        assert_eq!(calls[0].scheduled_arrival.as_deref(), Some("25:10:00"));
     }
 
     #[test]
@@ -950,6 +1177,12 @@ mod tests {
             )
             .unwrap();
         assert!(removed_monday.is_empty());
+        assert!(
+            store
+                .route_trips("route-1", GtfsDate::parse_iso("2026-09-28").unwrap(), 20,)
+                .unwrap()
+                .is_empty()
+        );
 
         let added_tuesday = store
             .scheduled_departures(
@@ -962,6 +1195,13 @@ mod tests {
         assert_eq!(added_tuesday.len(), 1);
         assert_eq!(added_tuesday[0].scheduled_departure, "25:11:00");
         assert_eq!(added_tuesday[0].route_short_name.as_deref(), Some("8"));
+        assert_eq!(
+            store
+                .route_trips("route-1", GtfsDate::parse_iso("2026-09-29").unwrap(), 20,)
+                .unwrap()[0]
+                .source_id,
+            "trip-1"
+        );
 
         let after_departure = store
             .scheduled_departures(
