@@ -7,7 +7,7 @@ use std::{
 use serde::de::DeserializeOwned;
 use zip::ZipArchive;
 
-use super::{Agency, Calendar, CalendarDate, Route, ShapePoint, Stop, StopTime, Trip};
+use super::{Agency, Calendar, CalendarDate, Route, ShapePoint, Stop, StopTime, Transfer, Trip};
 
 const REQUIRED_FILES: &[&str] = &[
     "agency.txt",
@@ -124,6 +124,16 @@ impl<R: Read + Seek> GtfsArchive<R> {
         E: From<GtfsError>,
     {
         self.visit_optional_file("shapes.txt", visitor)
+    }
+
+    pub fn visit_transfers<E>(
+        &mut self,
+        visitor: impl FnMut(Transfer) -> Result<(), E>,
+    ) -> Result<u64, E>
+    where
+        E: From<GtfsError>,
+    {
+        self.visit_optional_file("transfers.txt", visitor)
     }
 
     fn visit_optional_file<T: DeserializeOwned, E: From<GtfsError>>(

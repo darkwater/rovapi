@@ -13,6 +13,7 @@ pub struct FeedCounts {
     pub calendars: u64,
     pub calendar_dates: u64,
     pub shape_points: u64,
+    pub transfers: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -305,6 +306,7 @@ pub fn validate<R: Read + Seek>(
     })?;
 
     let mut trip_ids = HashSet::new();
+    let mut trip_routes = HashMap::new();
     report.counts.trips = archive.visit_trips(|trip| {
         if !trip_ids.insert(trip.trip_id.clone()) {
             report.issue(
@@ -330,9 +332,145 @@ pub fn validate<R: Read + Seek>(
         if !trip.shape_id.is_empty() && !shape_ids.contains(&trip.shape_id) {
             report.issue(
                 "unknown_shape",
-                trip.trip_id,
+                trip.trip_id.clone(),
                 format!("shape_id {:?} does not exist", trip.shape_id),
             );
+        }
+        trip_routes.entry(trip.trip_id).or_insert(trip.route_id);
+        Ok::<_, GtfsError>(())
+    })?;
+
+    let mut transfer_keys = HashSet::new();
+    report.counts.transfers = archive.visit_transfers(|transfer| {
+        let record = format!(
+            "{}:{}:{}:{}:{}:{}",
+            transfer.from_stop_id,
+            transfer.to_stop_id,
+            transfer.from_trip_id,
+            transfer.to_trip_id,
+            transfer.from_route_id,
+            transfer.to_route_id
+        );
+        let key = (
+            transfer.from_stop_id.clone(),
+            transfer.to_stop_id.clone(),
+            transfer.from_trip_id.clone(),
+            transfer.to_trip_id.clone(),
+            transfer.from_route_id.clone(),
+            transfer.to_route_id.clone(),
+        );
+        if !transfer_keys.insert(key) {
+            report.issue(
+                "duplicate_transfer",
+                record.clone(),
+                "transfer primary key occurs more than once".to_owned(),
+            );
+        }
+        if transfer.transfer_type > 5 {
+            report.issue(
+                "invalid_transfer_type",
+                record.clone(),
+                "transfer_type must be between 0 and 5".to_owned(),
+            );
+        } else if transfer.transfer_type <= 3 {
+            if transfer.from_stop_id.is_empty() || transfer.to_stop_id.is_empty() {
+                report.issue(
+                    "missing_transfer_stop",
+                    record.clone(),
+                    "from_stop_id and to_stop_id are required for transfer types 0 through 3"
+                        .to_owned(),
+                );
+            }
+        } else if transfer.from_trip_id.is_empty() || transfer.to_trip_id.is_empty() {
+            report.issue(
+                "missing_linked_trip",
+                record.clone(),
+                "from_trip_id and to_trip_id are required for transfer types 4 and 5".to_owned(),
+            );
+        }
+        if transfer.transfer_type == 2 && transfer.min_transfer_time.is_none() {
+            report.issue(
+                "missing_transfer_time",
+                record.clone(),
+                "min_transfer_time is required for transfer_type 2".to_owned(),
+            );
+        }
+
+        for (direction, stop_id) in [
+            ("from", transfer.from_stop_id.as_str()),
+            ("to", transfer.to_stop_id.as_str()),
+        ] {
+            if stop_id.is_empty() {
+                continue;
+            }
+            let Some((location_type, _)) = stop_hierarchy.get(stop_id) else {
+                report.issue(
+                    "unknown_transfer_stop",
+                    record.clone(),
+                    format!("{direction}_stop_id {stop_id:?} does not exist"),
+                );
+                continue;
+            };
+            let valid_type = if matches!(transfer.transfer_type, 4 | 5) {
+                *location_type == 0
+            } else {
+                matches!(location_type, 0 | 1)
+            };
+            if !valid_type {
+                report.issue(
+                    "invalid_transfer_stop_type",
+                    record.clone(),
+                    format!(
+                        "{direction}_stop_id {stop_id:?} has invalid location_type {location_type}"
+                    ),
+                );
+            }
+        }
+
+        for (direction, route_id) in [
+            ("from", transfer.from_route_id.as_str()),
+            ("to", transfer.to_route_id.as_str()),
+        ] {
+            if !route_id.is_empty() && !route_ids.contains(route_id) {
+                report.issue(
+                    "unknown_transfer_route",
+                    record.clone(),
+                    format!("{direction}_route_id {route_id:?} does not exist"),
+                );
+            }
+        }
+        for (direction, trip_id, route_id) in [
+            (
+                "from",
+                transfer.from_trip_id.as_str(),
+                transfer.from_route_id.as_str(),
+            ),
+            (
+                "to",
+                transfer.to_trip_id.as_str(),
+                transfer.to_route_id.as_str(),
+            ),
+        ] {
+            if trip_id.is_empty() {
+                continue;
+            }
+            let Some(actual_route_id) = trip_routes.get(trip_id) else {
+                report.issue(
+                    "unknown_transfer_trip",
+                    record.clone(),
+                    format!("{direction}_trip_id {trip_id:?} does not exist"),
+                );
+                continue;
+            };
+            if !route_id.is_empty() && route_id != actual_route_id {
+                report.issue(
+                    "transfer_trip_route_mismatch",
+                    record.clone(),
+                    format!(
+                        "{direction}_trip_id {trip_id:?} belongs to route {actual_route_id:?}, not {route_id:?}"
+                    ),
+                );
+            }
         }
         Ok::<_, GtfsError>(())
     })?;
@@ -408,6 +546,10 @@ mod tests {
             (
                 "shapes.txt",
                 "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,52.0907,5.1214,1,0\nshape-1,52.1000,5.1300,2,1200.5\n",
+            ),
+            (
+                "transfers.txt",
+                "from_stop_id,to_stop_id,from_route_id,to_route_id,from_trip_id,to_trip_id,transfer_type,min_transfer_time\n",
             ),
         ];
         let mut output = Cursor::new(Vec::new());
@@ -525,6 +667,23 @@ mod tests {
         assert!(codes.contains("unexpected_parent_station"));
         assert!(codes.contains("self_parent_station"));
         assert!(codes.contains("invalid_location_type"));
+    }
+
+    #[test]
+    fn validates_transfer_rules_and_references() {
+        let mut feed = archive(&[(
+            "transfers.txt",
+            "from_stop_id,to_stop_id,from_route_id,to_route_id,from_trip_id,to_trip_id,transfer_type,min_transfer_time\nstop-1,missing-stop,route-1,missing-route,trip-1,missing-trip,2,\n,,,,trip-1,,4,\nstop-1,stop-1,missing-route,,trip-1,,9,\n",
+        )]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("missing_transfer_time"));
+        assert!(codes.contains("unknown_transfer_stop"));
+        assert!(codes.contains("unknown_transfer_route"));
+        assert!(codes.contains("unknown_transfer_trip"));
+        assert!(codes.contains("missing_linked_trip"));
+        assert!(codes.contains("invalid_transfer_type"));
     }
 
     #[test]

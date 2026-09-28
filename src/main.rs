@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 calendars = summary.calendars,
                 calendar_dates = summary.calendar_dates,
                 shape_points = summary.shape_points,
+                transfers = summary.transfers,
                 trips = summary.trips,
                 stop_times = summary.stop_times,
                 "GTFS schedule imported and activated"

@@ -14,7 +14,8 @@ use crate::gtfs::{GtfsArchive, GtfsDate, GtfsError, GtfsTime, Stop, ValidationRe
 const SCHEMA: &str = include_str!("../../migrations/0001_schedule.sql");
 const CALENDAR_SCHEMA: &str = include_str!("../../migrations/0002_calendar.sql");
 const SHAPE_SCHEMA: &str = include_str!("../../migrations/0003_shapes.sql");
-const SCHEMA_VERSION: u32 = 3;
+const TRANSFER_SCHEMA: &str = include_str!("../../migrations/0004_transfers.sql");
+const SCHEMA_VERSION: u32 = 4;
 const EARTH_RADIUS_METRES: f64 = 6_371_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,6 +113,7 @@ pub struct ImportSummary {
     pub calendars: u64,
     pub calendar_dates: u64,
     pub shape_points: u64,
+    pub transfers: u64,
     pub trips: u64,
     pub stop_times: u64,
 }
@@ -181,6 +183,7 @@ impl SqliteStore {
         store.connection.execute_batch(SCHEMA)?;
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.connection.execute_batch(SHAPE_SCHEMA)?;
+        store.connection.execute_batch(TRANSFER_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -193,6 +196,7 @@ impl SqliteStore {
         store.connection.execute_batch(SCHEMA)?;
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.connection.execute_batch(SHAPE_SCHEMA)?;
+        store.connection.execute_batch(TRANSFER_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -390,6 +394,29 @@ impl SqliteStore {
         })?;
         drop(trip_statement);
 
+        let mut transfer_statement = transaction.prepare(
+            "INSERT INTO transfers(
+                from_stop_source_id, to_stop_source_id,
+                from_trip_source_id, to_trip_source_id,
+                from_route_source_id, to_route_source_id,
+                transfer_type, min_transfer_time
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        let transfers = archive.visit_transfers(|transfer| {
+            transfer_statement.execute(params![
+                transfer.from_stop_id,
+                transfer.to_stop_id,
+                transfer.from_trip_id,
+                transfer.to_trip_id,
+                transfer.from_route_id,
+                transfer.to_route_id,
+                transfer.transfer_type,
+                transfer.min_transfer_time,
+            ])?;
+            Ok::<_, StorageError>(())
+        })?;
+        drop(transfer_statement);
+
         let mut stop_time_statement = transaction.prepare(
             "INSERT INTO stop_times(
                 trip_id, stop_id, stop_sequence, arrival_service_seconds,
@@ -427,6 +454,7 @@ impl SqliteStore {
             calendars,
             calendar_dates,
             shape_points,
+            transfers,
             trips,
             stop_times,
         })
@@ -1077,6 +1105,10 @@ mod tests {
             "shapes.txt",
             "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\nshape-1,52.0907,5.1214,1,0\nshape-1,52.1000,5.1300,2,1200.5\n",
         ),
+        (
+            "transfers.txt",
+            "from_stop_id,to_stop_id,transfer_type,min_transfer_time\nstop-1,stop-1,2,180\n",
+        ),
     ];
 
     fn gtfs_archive(overrides: &[(&str, &str)]) -> GtfsArchive<Cursor<Vec<u8>>> {
@@ -1115,7 +1147,7 @@ mod tests {
     #[test]
     fn bundled_sqlite_supports_schema_fts_and_rtree() {
         let mut store = SqliteStore::create_in_memory().unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), 4);
         store
             .insert_stop(stop("ut-centraal", "Utrecht Centraal", 52.0893, 5.1103))
             .unwrap();
@@ -1173,6 +1205,7 @@ mod tests {
                 calendars: 1,
                 calendar_dates: 0,
                 shape_points: 2,
+                transfers: 1,
                 trips: 1,
                 stop_times: 1,
             }
@@ -1208,6 +1241,13 @@ mod tests {
         let shape = store.trip_shape("trip-1").unwrap();
         assert_eq!(shape.len(), 2);
         assert_eq!(shape[1].distance_traveled, Some(1200.5));
+        let transfer_time: u32 = store
+            .connection
+            .query_row("SELECT min_transfer_time FROM transfers", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(transfer_time, 180);
     }
 
     #[test]
@@ -1331,7 +1371,7 @@ mod tests {
             SqliteStore::open_read_only(database.path()),
             Err(StorageError::UnsupportedSchema {
                 actual: 999,
-                expected: 3
+                expected: 4
             })
         ));
     }

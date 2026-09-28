@@ -94,6 +94,26 @@ pub struct ShapePoint {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Transfer {
+    #[serde(default)]
+    pub from_stop_id: String,
+    #[serde(default)]
+    pub to_stop_id: String,
+    #[serde(default)]
+    pub from_route_id: String,
+    #[serde(default)]
+    pub to_route_id: String,
+    #[serde(default)]
+    pub from_trip_id: String,
+    #[serde(default)]
+    pub to_trip_id: String,
+    #[serde(default)]
+    pub transfer_type: u8,
+    #[serde(default)]
+    pub min_transfer_time: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Calendar {
     pub service_id: String,
     pub monday: u8,

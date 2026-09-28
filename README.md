@@ -77,6 +77,8 @@ profile used for scheduled Dutch transit. It requires `agency.txt`, `stops.txt`,
 `routes.txt`, `trips.txt`, `stop_times.txt`, and at least one calendar file.
 Demand-responsive `location_group_id` and GeoJSON `location_id` stop times are
 not supported yet and must not be silently treated as ordinary stops.
+Optional `shapes.txt` and `transfers.txt` files are validated and imported,
+including trip-specific and linked-trip transfer rules.
 
 Run the checks with:
 
