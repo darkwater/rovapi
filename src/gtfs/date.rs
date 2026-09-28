@@ -135,6 +135,18 @@ impl<'de> Deserialize<'de> for GtfsDate {
     }
 }
 
+pub(crate) fn deserialize_optional<'de, D>(deserializer: D) -> Result<Option<GtfsDate>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value.parse().map(Some).map_err(serde::de::Error::custom)
+    }
+}
+
 impl Serialize for GtfsDate {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

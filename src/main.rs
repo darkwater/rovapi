@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 data_directory.import_and_activate(&version, file, ImportLimits::default())?;
             info!(
                 version = active.version.as_str(),
+                feed_info = summary.feed_info,
                 agencies = summary.agencies,
                 stops = summary.stops,
                 routes = summary.routes,

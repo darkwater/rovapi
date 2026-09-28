@@ -2,7 +2,8 @@ use serde::Deserialize;
 
 use super::{
     GtfsDate,
-    time::{GtfsTime, deserialize_optional},
+    date::deserialize_optional as deserialize_optional_date,
+    time::{GtfsTime, deserialize_optional as deserialize_optional_time},
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -67,9 +68,9 @@ pub struct Trip {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct StopTime {
     pub trip_id: String,
-    #[serde(default, deserialize_with = "deserialize_optional")]
+    #[serde(default, deserialize_with = "deserialize_optional_time")]
     pub arrival_time: Option<GtfsTime>,
-    #[serde(default, deserialize_with = "deserialize_optional")]
+    #[serde(default, deserialize_with = "deserialize_optional_time")]
     pub departure_time: Option<GtfsTime>,
     pub stop_id: String,
     pub stop_sequence: u32,
@@ -111,6 +112,25 @@ pub struct Transfer {
     pub transfer_type: u8,
     #[serde(default)]
     pub min_transfer_time: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct FeedInfo {
+    pub feed_publisher_name: String,
+    pub feed_publisher_url: String,
+    pub feed_lang: String,
+    #[serde(default)]
+    pub default_lang: String,
+    #[serde(default, deserialize_with = "deserialize_optional_date")]
+    pub feed_start_date: Option<GtfsDate>,
+    #[serde(default, deserialize_with = "deserialize_optional_date")]
+    pub feed_end_date: Option<GtfsDate>,
+    #[serde(default)]
+    pub feed_version: String,
+    #[serde(default)]
+    pub feed_contact_email: String,
+    #[serde(default)]
+    pub feed_contact_url: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

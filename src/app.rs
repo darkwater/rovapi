@@ -14,6 +14,7 @@ use tower_http::{
 
 use crate::{
     api::routes::{get_route, route_trips, search_routes},
+    api::schedule::get_schedule_metadata,
     api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops},
     api::trips::{get_trip, trip_shape, trip_stops},
     error::{method_not_allowed, not_found},
@@ -71,6 +72,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
+        .route("/v1/schedule", get(get_schedule_metadata))
         .route("/v1/stops", get(search_stops))
         .route("/v1/stops/nearby", get(nearby_stops))
         .route("/v1/stops/:id/departures", get(scheduled_departures))
@@ -130,6 +132,10 @@ mod tests {
 
     fn minimal_gtfs() -> GtfsArchive<Cursor<Vec<u8>>> {
         let files = [
+            (
+                "feed_info.txt",
+                "feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version\nExample Publisher,https://example.nl,nl,20260901,20260930,2026-09\n",
+            ),
             (
                 "agency.txt",
                 "agency_id,agency_name,agency_url,agency_timezone\nNL,Example,https://example.nl,Europe/Amsterdam\n",
@@ -326,6 +332,12 @@ mod tests {
         ));
         let mut store = SqliteStore::create(&path).unwrap();
         store.import_gtfs(&mut minimal_gtfs()).unwrap();
+        store
+            .set_metadata("schedule_version", "test-version")
+            .unwrap();
+        store
+            .set_metadata("imported_at_unix", "1234567890")
+            .unwrap();
         store.prepare_for_activation().unwrap();
         let reader = SqliteReader::open(&path).await.unwrap();
 
@@ -408,6 +420,7 @@ mod tests {
         assert_eq!(json[0]["scheduled_departure"], "25:11:00");
 
         let response = app
+            .clone()
             .oneshot(
                 Request::get("/v1/trips/trip-1/shape")
                     .body(Body::empty())
@@ -421,6 +434,17 @@ mod tests {
                 .unwrap();
         assert_eq!(json.as_array().unwrap().len(), 2);
         assert_eq!(json[1]["distance_traveled"], 1200.5);
+
+        let response = app
+            .oneshot(Request::get("/v1/schedule").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(json["schedule_version"], "test-version");
+        assert_eq!(json["feed"]["source_version"], "2026-09");
 
         let _ = fs::remove_file(path);
     }

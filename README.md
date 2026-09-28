@@ -43,6 +43,7 @@ Endpoints currently available:
 
 - `GET /health/live`
 - `GET /health/ready`
+- `GET /v1/schedule`
 - `GET /v1/stops?query=utrecht&limit=20`
 - `GET /v1/stops/nearby?lat=52.09&lon=5.12&radius=1000&limit=20`
 - `GET /v1/stops/{source_id}`
@@ -64,6 +65,10 @@ returned in `stop_sequence` order with both readable GTFS times and their raw
 seconds since the start of the service day.
 When `shapes.txt` is present, trip geometry is returned as ordered latitude and
 longitude points with the optional source distance along the shape.
+
+The schedule endpoint reports the locally activated version and import time. If
+the feed supplies `feed_info.txt`, it also reports the publisher, source version,
+language, and advertised date range.
 
 Readiness returns HTTP 503 until a validated schedule database has been loaded;
 liveness continues to report whether the process itself is running.

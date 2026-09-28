@@ -15,7 +15,8 @@ const SCHEMA: &str = include_str!("../../migrations/0001_schedule.sql");
 const CALENDAR_SCHEMA: &str = include_str!("../../migrations/0002_calendar.sql");
 const SHAPE_SCHEMA: &str = include_str!("../../migrations/0003_shapes.sql");
 const TRANSFER_SCHEMA: &str = include_str!("../../migrations/0004_transfers.sql");
-const SCHEMA_VERSION: u32 = 4;
+const FEED_INFO_SCHEMA: &str = include_str!("../../migrations/0005_feed_info.sql");
+const SCHEMA_VERSION: u32 = 5;
 const EARTH_RADIUS_METRES: f64 = 6_371_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,8 +106,29 @@ pub struct StoredShapePoint {
     pub distance_traveled: Option<f64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredFeedInfo {
+    pub publisher_name: String,
+    pub publisher_url: String,
+    pub feed_lang: String,
+    pub default_lang: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub source_version: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredScheduleMetadata {
+    pub schedule_version: Option<String>,
+    pub imported_at_unix: Option<u64>,
+    pub feed: Option<StoredFeedInfo>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ImportSummary {
+    pub feed_info: u64,
     pub agencies: u64,
     pub stops: u64,
     pub routes: u64,
@@ -146,6 +168,7 @@ pub trait ScheduleRepository {
     fn trip(&self, source_id: &str) -> Result<Option<StoredTrip>, StorageError>;
     fn trip_stops(&self, trip_source_id: &str) -> Result<Vec<ScheduledStopCall>, StorageError>;
     fn trip_shape(&self, trip_source_id: &str) -> Result<Vec<StoredShapePoint>, StorageError>;
+    fn schedule_metadata(&self) -> Result<StoredScheduleMetadata, StorageError>;
 }
 
 pub struct SqliteStore {
@@ -184,6 +207,7 @@ impl SqliteStore {
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.connection.execute_batch(TRANSFER_SCHEMA)?;
+        store.connection.execute_batch(FEED_INFO_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -197,6 +221,7 @@ impl SqliteStore {
         store.connection.execute_batch(CALENDAR_SCHEMA)?;
         store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.connection.execute_batch(TRANSFER_SCHEMA)?;
+        store.connection.execute_batch(FEED_INFO_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -229,6 +254,15 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<(), StorageError> {
+        self.connection.execute(
+            "INSERT INTO feed_metadata(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     /// Validates and imports the core GTFS records in one transaction.
     ///
     /// The target should be a newly created schedule database. Validation is
@@ -250,6 +284,28 @@ impl SqliteStore {
         archive: &mut GtfsArchive<R>,
     ) -> Result<ImportSummary, StorageError> {
         let transaction = self.connection.transaction()?;
+
+        let mut feed_info_statement = transaction.prepare(
+            "INSERT INTO feed_info(
+                singleton, publisher_name, publisher_url, feed_lang, default_lang,
+                start_date, end_date, source_version, contact_email, contact_url
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?;
+        let feed_info = archive.visit_feed_info(|feed| {
+            feed_info_statement.execute(params![
+                feed.feed_publisher_name,
+                feed.feed_publisher_url,
+                feed.feed_lang,
+                empty_to_none(&feed.default_lang),
+                feed.feed_start_date.map(GtfsDate::compact),
+                feed.feed_end_date.map(GtfsDate::compact),
+                empty_to_none(&feed.feed_version),
+                empty_to_none(&feed.feed_contact_email),
+                empty_to_none(&feed.feed_contact_url),
+            ])?;
+            Ok::<_, StorageError>(())
+        })?;
+        drop(feed_info_statement);
 
         let mut agency_statement = transaction.prepare(
             "INSERT INTO agencies(source_id, name, url, timezone) VALUES (?1, ?2, ?3, ?4)",
@@ -448,6 +504,7 @@ impl SqliteStore {
 
         transaction.commit()?;
         Ok(ImportSummary {
+            feed_info,
             agencies,
             stops,
             routes,
@@ -812,6 +869,50 @@ impl ScheduleRepository for SqliteStore {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    fn schedule_metadata(&self) -> Result<StoredScheduleMetadata, StorageError> {
+        let metadata_value = |key: &str| {
+            self.connection
+                .query_row(
+                    "SELECT value FROM feed_metadata WHERE key = ?1",
+                    [key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+        };
+        let schedule_version = metadata_value("schedule_version")?;
+        let imported_at_unix =
+            metadata_value("imported_at_unix")?.and_then(|value| value.parse::<u64>().ok());
+        let feed = self
+            .connection
+            .query_row(
+                "SELECT publisher_name, publisher_url, feed_lang, default_lang,
+                        start_date, end_date, source_version, contact_email, contact_url
+                 FROM feed_info WHERE singleton = 1",
+                [],
+                |row| {
+                    let start_date: Option<u32> = row.get(4)?;
+                    let end_date: Option<u32> = row.get(5)?;
+                    Ok(StoredFeedInfo {
+                        publisher_name: row.get(0)?,
+                        publisher_url: row.get(1)?,
+                        feed_lang: row.get(2)?,
+                        default_lang: row.get(3)?,
+                        start_date: start_date.map(format_compact_date),
+                        end_date: end_date.map(format_compact_date),
+                        source_version: row.get(6)?,
+                        contact_email: row.get(7)?,
+                        contact_url: row.get(8)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(StoredScheduleMetadata {
+            schedule_version,
+            imported_at_unix,
+            feed,
+        })
+    }
 }
 
 fn insert_gtfs_stop_prepared(
@@ -942,6 +1043,15 @@ fn map_trip(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTrip> {
 
 fn format_optional_gtfs_time(seconds: Option<u32>) -> Option<String> {
     seconds.map(|seconds| GtfsTime::from_seconds(seconds).to_string())
+}
+
+fn format_compact_date(date: u32) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        date / 10_000,
+        date / 100 % 100,
+        date % 100
+    )
 }
 
 fn validate_coordinates(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), StorageError> {
@@ -1077,6 +1187,10 @@ mod tests {
 
     const MINIMAL_GTFS: &[(&str, &str)] = &[
         (
+            "feed_info.txt",
+            "feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version\nExample Publisher,https://example.nl,nl,20260901,20260930,2026-09\n",
+        ),
+        (
             "agency.txt",
             "agency_id,agency_name,agency_url,agency_timezone\nNL,Example,https://example.nl,Europe/Amsterdam\n",
         ),
@@ -1147,7 +1261,7 @@ mod tests {
     #[test]
     fn bundled_sqlite_supports_schema_fts_and_rtree() {
         let mut store = SqliteStore::create_in_memory().unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), 5);
         store
             .insert_stop(stop("ut-centraal", "Utrecht Centraal", 52.0893, 5.1103))
             .unwrap();
@@ -1199,6 +1313,7 @@ mod tests {
         assert_eq!(
             summary,
             ImportSummary {
+                feed_info: 1,
                 agencies: 1,
                 stops: 1,
                 routes: 1,
@@ -1248,6 +1363,17 @@ mod tests {
             })
             .unwrap();
         assert_eq!(transfer_time, 180);
+        let source_version: String = store
+            .connection
+            .query_row("SELECT source_version FROM feed_info", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(source_version, "2026-09");
+        let metadata = store.schedule_metadata().unwrap();
+        assert_eq!(
+            metadata.feed.unwrap().start_date.as_deref(),
+            Some("2026-09-01")
+        );
+        assert!(metadata.schedule_version.is_none());
     }
 
     #[test]
@@ -1371,7 +1497,7 @@ mod tests {
             SqliteStore::open_read_only(database.path()),
             Err(StorageError::UnsupportedSchema {
                 actual: 999,
-                expected: 4
+                expected: 5
             })
         ));
     }

@@ -7,6 +7,7 @@ const MAX_REPORTED_ISSUES: usize = 100;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FeedCounts {
+    pub feed_info: u64,
     pub agencies: u64,
     pub stops: u64,
     pub routes: u64,
@@ -59,6 +60,38 @@ pub fn validate<R: Read + Seek>(
     archive: &mut GtfsArchive<R>,
 ) -> Result<ValidationReport, GtfsError> {
     let mut report = ValidationReport::default();
+    report.counts.feed_info = archive.visit_feed_info(|feed| {
+        if feed.feed_publisher_name.is_empty()
+            || feed.feed_publisher_url.is_empty()
+            || feed.feed_lang.is_empty()
+        {
+            report.issue(
+                "incomplete_feed_info",
+                "feed_info.txt".to_owned(),
+                "feed_publisher_name, feed_publisher_url, and feed_lang are required".to_owned(),
+            );
+        }
+        if feed
+            .feed_start_date
+            .zip(feed.feed_end_date)
+            .is_some_and(|(start, end)| start > end)
+        {
+            report.issue(
+                "invalid_feed_date_range",
+                "feed_info.txt".to_owned(),
+                "feed_start_date must not be after feed_end_date".to_owned(),
+            );
+        }
+        Ok::<_, GtfsError>(())
+    })?;
+    if report.counts.feed_info > 1 {
+        report.issue(
+            "multiple_feed_info_records",
+            "feed_info.txt".to_owned(),
+            "feed_info.txt must contain exactly one record".to_owned(),
+        );
+    }
+
     let mut agency_ids = HashSet::new();
     report.counts.agencies = archive.visit_agencies(|agency| {
         if !agency_ids.insert(agency.agency_id.clone()) {
@@ -519,6 +552,10 @@ mod tests {
     fn archive(overrides: &[(&str, &str)]) -> GtfsArchive<Cursor<Vec<u8>>> {
         let defaults = [
             (
+                "feed_info.txt",
+                "feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version\nExample Publisher,https://example.nl,nl,20260901,20260930,2026-09\n",
+            ),
+            (
                 "agency.txt",
                 "agency_id,agency_name,agency_url,agency_timezone\nNL,Example,https://example.nl,Europe/Amsterdam\n",
             ),
@@ -575,6 +612,7 @@ mod tests {
     fn accepts_a_consistent_feed() {
         let report = validate(&mut archive(&[])).unwrap();
         assert!(report.is_valid());
+        assert_eq!(report.counts.feed_info, 1);
         assert_eq!(report.counts.stop_times, 1);
         assert_eq!(report.counts.calendars, 1);
         assert_eq!(report.counts.shape_points, 2);
@@ -604,6 +642,20 @@ mod tests {
         assert!(codes.contains("invalid_exception_type"));
         assert!(codes.contains("duplicate_calendar_date"));
         assert!(codes.contains("unknown_service"));
+    }
+
+    #[test]
+    fn validates_feed_information() {
+        let mut feed = archive(&[(
+            "feed_info.txt",
+            "feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date\n,https://example.nl,nl,20261001,20260901\nSecond,https://second.example,nl,,\n",
+        )]);
+
+        let report = validate(&mut feed).unwrap();
+        let codes: HashSet<_> = report.issues.iter().map(|issue| issue.code).collect();
+        assert!(codes.contains("incomplete_feed_info"));
+        assert!(codes.contains("invalid_feed_date_range"));
+        assert!(codes.contains("multiple_feed_info_records"));
     }
 
     #[test]

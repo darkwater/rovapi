@@ -3,6 +3,7 @@ use std::{
     fs::{self, File, OpenOptions, TryLockError},
     io::{BufReader, BufWriter, Read, Seek, Write},
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -137,6 +138,13 @@ impl DataDirectory {
         let mut archive = GtfsArchive::open(reader, limits).map_err(StorageError::from)?;
         let mut store = SqliteStore::create(&staging)?;
         let summary = store.import_gtfs(&mut archive)?;
+        store.set_metadata("schedule_version", version.as_str())?;
+        let imported_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
+        store.set_metadata("imported_at_unix", &imported_at_unix)?;
         store.prepare_for_activation()?;
         let active = self.install_and_activate(version)?;
         staging_guard.disarm();
@@ -331,6 +339,7 @@ mod tests {
     use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::*;
+    use crate::storage::ScheduleRepository;
 
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -426,6 +435,10 @@ mod tests {
         assert!(data.database_path(&version).is_file());
         assert!(!data.staging_path(&version).exists());
         assert_eq!(data.active().unwrap(), Some(active));
+        let store = SqliteStore::open_read_only(data.database_path(&version)).unwrap();
+        let metadata = store.schedule_metadata().unwrap();
+        assert_eq!(metadata.schedule_version.as_deref(), Some("2026-09-28"));
+        assert!(metadata.imported_at_unix.is_some());
     }
 
     #[test]

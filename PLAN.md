@@ -221,7 +221,7 @@ headers. Geographic vehicle queries require a bounded viewport.
 - [x] Calendar and calendar-exception schema
 - [x] Shape-point schema and trip geometry endpoint
 - [x] Transfer schema
-- [ ] Feed-version schema
+- [x] GTFS feed information and source-version schema
 - [x] Atomic core GTFS-to-SQLite import transaction
 - [x] Mandatory validation before import and prepared bulk inserts
 - [x] Integrity check, WAL checkpoint, and schema check before activation

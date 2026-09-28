@@ -6,7 +6,7 @@ use crate::gtfs::{GtfsDate, GtfsTime};
 
 use super::{
     NearbyStop, ScheduleRepository, ScheduledDeparture, ScheduledStopCall, SqliteStore,
-    StorageError, StoredRoute, StoredShapePoint, StoredStop, StoredTrip,
+    StorageError, StoredRoute, StoredScheduleMetadata, StoredShapePoint, StoredStop, StoredTrip,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -67,6 +67,9 @@ enum Command {
     TripShape {
         trip_source_id: String,
         response: oneshot::Sender<Result<Vec<StoredShapePoint>, StorageError>>,
+    },
+    ScheduleMetadata {
+        response: oneshot::Sender<Result<StoredScheduleMetadata, StorageError>>,
     },
 }
 
@@ -171,6 +174,9 @@ impl SqliteReader {
                             response,
                         } => {
                             let _ = response.send(store.trip_shape(&trip_source_id));
+                        }
+                        Command::ScheduleMetadata { response } => {
+                            let _ = response.send(store.schedule_metadata());
                         }
                     }
                 }
@@ -348,6 +354,15 @@ impl SqliteReader {
                 trip_source_id: trip_source_id.into(),
                 response,
             })
+            .await
+            .map_err(|_| StorageError::WorkerStopped)?;
+        receiver.await.map_err(|_| StorageError::WorkerStopped)?
+    }
+
+    pub async fn schedule_metadata(&self) -> Result<StoredScheduleMetadata, StorageError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::ScheduleMetadata { response })
             .await
             .map_err(|_| StorageError::WorkerStopped)?;
         receiver.await.map_err(|_| StorageError::WorkerStopped)?
