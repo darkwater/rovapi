@@ -27,7 +27,14 @@ pub struct ParseGtfsDateError {
 
 impl GtfsDate {
     pub fn parse_iso(value: &str) -> Result<Self, ParseGtfsDateError> {
-        if value.len() != 10 || &value[4..5] != "-" || &value[7..8] != "-" {
+        let bytes = value.as_bytes();
+        if bytes.len() != 10
+            || bytes[4] != b'-'
+            || bytes[7] != b'-'
+            || !bytes[..4].iter().all(u8::is_ascii_digit)
+            || !bytes[5..7].iter().all(u8::is_ascii_digit)
+            || !bytes[8..].iter().all(u8::is_ascii_digit)
+        {
             return Err(ParseGtfsDateError {
                 value: value.to_owned(),
             });
@@ -166,6 +173,12 @@ mod tests {
         assert_eq!(date.to_string(), "2024-02-29");
         assert_eq!(date.compact(), 20_240_229);
         assert!("20230229".parse::<GtfsDate>().is_err());
+    }
+
+    #[test]
+    fn rejects_non_ascii_iso_dates_without_panicking() {
+        assert!(GtfsDate::parse_iso("ééééé").is_err());
+        assert!(GtfsDate::parse_iso("2026-é-28").is_err());
     }
 
     #[test]
