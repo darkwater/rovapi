@@ -219,7 +219,8 @@ headers. Geographic vehicle queries require a bounded viewport.
 - [x] Mandatory validation before import and prepared bulk inserts
 - [x] Integrity check, WAL checkpoint, and schema check before activation
 - [x] Versioned database-file installation, validation, and atomic activation
-- [ ] Stop search, nearby stops, routes, trips, and scheduled departures
+- [x] Stop lookup, search, and nearby-stop API endpoints
+- [ ] Routes, trips, and scheduled departure API endpoints
 - [ ] Representative fixtures and integration tests
 
 ### M2 — realtime MVP

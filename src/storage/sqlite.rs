@@ -7,6 +7,7 @@ use std::{
 };
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
+use serde::Serialize;
 
 use crate::gtfs::{GtfsArchive, GtfsError, Stop, ValidationReport, validate};
 
@@ -26,7 +27,7 @@ pub struct StopInput<'a> {
     pub platform_code: Option<&'a str>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StoredStop {
     pub source_id: String,
     pub code: Option<String>,
@@ -38,7 +39,7 @@ pub struct StoredStop {
     pub platform_code: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NearbyStop {
     pub stop: StoredStop,
     pub distance_metres: f64,

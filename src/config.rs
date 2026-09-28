@@ -1,10 +1,12 @@
-use std::{env, env::VarError, fmt, net::SocketAddr};
+use std::{env, env::VarError, fmt, net::SocketAddr, path::PathBuf};
 
 const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:3000";
+const DEFAULT_DATA_DIRECTORY: &str = "data";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub bind_address: SocketAddr,
+    pub data_directory: PathBuf,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -30,7 +32,14 @@ impl Config {
             value,
         })?;
 
-        Ok(Self { bind_address })
+        let data_directory = env::var_os("OVAPI_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIRECTORY));
+
+        Ok(Self {
+            bind_address,
+            data_directory,
+        })
     }
 }
 
@@ -40,6 +49,7 @@ impl Default for Config {
             bind_address: DEFAULT_BIND_ADDRESS
                 .parse()
                 .expect("the default bind address must be valid"),
+            data_directory: PathBuf::from(DEFAULT_DATA_DIRECTORY),
         }
     }
 }
@@ -63,5 +73,6 @@ mod tests {
     #[test]
     fn default_binds_to_localhost() {
         assert_eq!(Config::default().bind_address.to_string(), "127.0.0.1:3000");
+        assert_eq!(Config::default().data_directory, PathBuf::from("data"));
     }
 }

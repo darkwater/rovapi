@@ -7,7 +7,7 @@ use super::{NearbyStop, SqliteStore, StopRepository, StorageError, StoredStop};
 const COMMAND_CAPACITY: usize = 64;
 
 /// Async handle to a read-only SQLite connection owned by a blocking worker.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SqliteReader {
     sender: mpsc::Sender<Command>,
 }

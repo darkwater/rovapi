@@ -13,14 +13,17 @@ use tower_http::{
 };
 
 use crate::{
+    api::stops::{get_stop, nearby_stops, search_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
+    storage::SqliteReader,
 };
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub(crate) started_at: Instant,
     pub(crate) ready: Arc<AtomicBool>,
+    schedule: Option<SqliteReader>,
 }
 
 impl AppState {
@@ -28,15 +31,31 @@ impl AppState {
         Self {
             started_at: Instant::now(),
             ready: Arc::new(AtomicBool::new(false)),
+            schedule: None,
         }
     }
 
-    pub fn set_ready(&self, ready: bool) {
+    pub fn with_schedule(schedule: SqliteReader) -> Self {
+        Self {
+            started_at: Instant::now(),
+            ready: Arc::new(AtomicBool::new(true)),
+            schedule: Some(schedule),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
     }
 
     pub(crate) fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn schedule(&self) -> Result<&SqliteReader, crate::error::ApiError> {
+        self.schedule
+            .as_ref()
+            .ok_or_else(crate::error::ApiError::schedule_unavailable)
     }
 }
 
@@ -50,6 +69,9 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
+        .route("/v1/stops", get(search_stops))
+        .route("/v1/stops/nearby", get(nearby_stops))
+        .route("/v1/stops/:id", get(get_stop))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(Arc::new(state))
@@ -74,6 +96,11 @@ pub fn router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -83,6 +110,9 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::storage::{SqliteStore, StopInput};
+
+    static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[tokio::test]
     async fn liveness_endpoint_reports_ok() {
@@ -167,5 +197,61 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], "method_not_allowed");
+    }
+
+    #[tokio::test]
+    async fn stop_query_reports_unavailable_without_schedule() {
+        let response = router(AppState::new())
+            .oneshot(
+                Request::get("/v1/stops?query=utrecht")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "schedule_unavailable");
+    }
+
+    #[tokio::test]
+    async fn stop_search_uses_loaded_schedule() {
+        let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ovapi-app-{}-{sequence}.sqlite",
+            std::process::id()
+        ));
+        let mut store = SqliteStore::create(&path).unwrap();
+        store
+            .insert_stop(StopInput {
+                source_id: "ut-centraal",
+                code: Some("UT"),
+                name: "Utrecht Centraal",
+                latitude: Some(52.0893),
+                longitude: Some(5.1103),
+                location_type: Some(1),
+                parent_source_id: None,
+                platform_code: None,
+            })
+            .unwrap();
+        store.prepare_for_activation().unwrap();
+        let reader = SqliteReader::open(&path).await.unwrap();
+
+        let response = router(AppState::with_schedule(reader))
+            .oneshot(
+                Request::get("/v1/stops?query=utrecht")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json[0]["source_id"], "ut-centraal");
+
+        let _ = fs::remove_file(path);
     }
 }
