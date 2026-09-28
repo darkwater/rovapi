@@ -7,9 +7,10 @@ use std::{
 };
 
 use rovapi_models::{
-    FeedInfo as StoredFeedInfo, NearbyStop, Route as StoredRoute,
-    ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall,
-    ShapePoint as StoredShapePoint, Stop as StoredStop, Trip as StoredTrip,
+    AgencyId, FeedInfo as StoredFeedInfo, NearbyStop, Route as StoredRoute, RouteId,
+    ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ServiceId,
+    ShapeId, ShapePoint as StoredShapePoint, Stop as StoredStop, StopId, Trip as StoredTrip,
+    TripId,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Statement, Transaction, params};
 
@@ -634,8 +635,8 @@ impl ScheduleRepository for SqliteStore {
             |row| {
                 let seconds = row.get(6)?;
                 Ok(ScheduledDeparture {
-                    trip_id: row.get(0)?,
-                    route_id: row.get(1)?,
+                    trip_id: TripId::from(row.get::<_, String>(0)?),
+                    route_id: RouteId::from(row.get::<_, String>(1)?),
                     route_short_name: row.get(2)?,
                     route_long_name: row.get(3)?,
                     headsign: row.get(4)?,
@@ -942,21 +943,21 @@ fn empty_to_none(value: &str) -> Option<&str> {
 
 fn map_stop(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredStop> {
     Ok(StoredStop {
-        source_id: row.get(0)?,
+        source_id: StopId::from(row.get::<_, String>(0)?),
         code: row.get(1)?,
         name: row.get(2)?,
         latitude: row.get(3)?,
         longitude: row.get(4)?,
         location_type: row.get(5)?,
-        parent_source_id: row.get(6)?,
+        parent_source_id: row.get::<_, Option<String>>(6)?.map(StopId::from),
         platform_code: row.get(7)?,
     })
 }
 
 fn map_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRoute> {
     Ok(StoredRoute {
-        source_id: row.get(0)?,
-        agency_source_id: row.get(1)?,
+        source_id: RouteId::from(row.get::<_, String>(0)?),
+        agency_source_id: row.get::<_, Option<String>>(1)?.map(AgencyId::from),
         short_name: row.get(2)?,
         long_name: row.get(3)?,
         route_type: row.get(4)?,
@@ -967,13 +968,13 @@ fn map_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRoute> {
 
 fn map_trip(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTrip> {
     Ok(StoredTrip {
-        source_id: row.get(0)?,
-        route_id: row.get(1)?,
-        service_id: row.get(2)?,
+        source_id: TripId::from(row.get::<_, String>(0)?),
+        route_id: RouteId::from(row.get::<_, String>(1)?),
+        service_id: ServiceId::from(row.get::<_, String>(2)?),
         headsign: row.get(3)?,
         short_name: row.get(4)?,
         direction_id: row.get(5)?,
-        shape_id: row.get(6)?,
+        shape_id: row.get::<_, Option<String>>(6)?.map(ShapeId::from),
     })
 }
 

@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State, rejection::QueryRejection},
 };
-use rovapi_models::{RouteSearchQuery, RouteTripsQuery};
+use rovapi_models::{RouteId, RouteSearchQuery, RouteTripsQuery};
 
 use crate::{
     AppState,
@@ -33,7 +33,7 @@ pub(crate) async fn search_routes(
 
 pub(crate) async fn get_route(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<RouteId>,
 ) -> Result<Json<StoredRoute>, ApiError> {
     state
         .schedule()?
@@ -46,7 +46,7 @@ pub(crate) async fn get_route(
 
 pub(crate) async fn route_trips(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<RouteId>,
     query: Result<Query<RouteTripsQuery>, QueryRejection>,
 ) -> Result<Json<Vec<StoredTrip>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;

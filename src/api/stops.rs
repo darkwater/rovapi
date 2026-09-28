@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State, rejection::QueryRejection},
 };
-use rovapi_models::{DeparturesQuery, NearbyStopsQuery, StopSearchQuery};
+use rovapi_models::{DeparturesQuery, NearbyStopsQuery, StopId, StopSearchQuery};
 
 use crate::{
     AppState,
@@ -17,7 +17,7 @@ use super::{parse_service_date, validate_limit};
 
 pub(crate) async fn get_stop(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<StopId>,
 ) -> Result<Json<StoredStop>, ApiError> {
     let reader = state.schedule()?;
     reader
@@ -72,7 +72,7 @@ pub(crate) async fn nearby_stops(
 
 pub(crate) async fn scheduled_departures(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<StopId>,
     query: Result<Query<DeparturesQuery>, QueryRejection>,
 ) -> Result<Json<Vec<ScheduledDeparture>>, ApiError> {
     let Query(query) = query.map_err(ApiError::query)?;

@@ -44,14 +44,16 @@ Substantially addressed, with follow-up still useful:
 - **T2:** invalid geographic input and no-pickup behavior now have regression
   coverage, but the complete extractor/error-contract matrix is still open.
 - **M18:** public wire types and query models now live in the independent
-  `rovapi-models` crate and are shared by server and consumers. The current v1
-  fields still expose raw GTFS identifiers and numeric concepts; introducing
-  canonical source-independent IDs and enums remains open.
+  `rovapi-models` crate and are shared by server and consumers. Agency, stop,
+  route, trip, service, and shape IDs are distinct transparent newtypes, also
+  used for HTTP path extraction. The current v1 fields still expose
+  source-native identifiers and numeric GTFS concepts; introducing namespaces,
+  canonical IDs, and enums remains open (**M2**).
 
 Out of scope by current product decision: **H5**, because private or
 credential-bearing feed sources are not supported.
 
-Still open: **H3**, **M1-M2**, **M7-M9**, **M11-M12**, **M15**, **M17**,
+Still open: **H3**, **M1**, **M7-M9**, **M11-M12**, **M15**, **M17**,
 **T1**, **T3**, and **L2**. The next architectural milestone is in-process
 refresh with atomic reader replacement, followed by retention and provenance.
 

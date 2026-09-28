@@ -4,6 +4,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use rovapi_models::TripId;
 
 use crate::{
     AppState,
@@ -13,7 +14,7 @@ use crate::{
 
 pub(crate) async fn get_trip(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<TripId>,
 ) -> Result<Json<StoredTrip>, ApiError> {
     state
         .schedule()?
@@ -26,7 +27,7 @@ pub(crate) async fn get_trip(
 
 pub(crate) async fn trip_stops(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<TripId>,
 ) -> Result<Json<Vec<ScheduledStopCall>>, ApiError> {
     let reader = state.schedule()?;
     if reader
@@ -46,7 +47,7 @@ pub(crate) async fn trip_stops(
 
 pub(crate) async fn trip_shape(
     State(state): State<Arc<AppState>>,
-    Path(source_id): Path<String>,
+    Path(source_id): Path<TripId>,
 ) -> Result<Json<Vec<StoredShapePoint>>, ApiError> {
     let reader = state.schedule()?;
     if reader

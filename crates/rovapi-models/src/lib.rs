@@ -4,7 +4,7 @@
 //! server. The crate deliberately does not select an HTTP client or async
 //! runtime, so applications can combine it with their preferred transport.
 
-use std::collections::BTreeMap;
+use std::{borrow::Borrow, collections::BTreeMap, fmt};
 
 pub use geo_types::{LineString, Point};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,84 @@ pub mod error_code {
 const fn default_limit() -> usize {
     DEFAULT_LIMIT
 }
+
+macro_rules! id_type {
+    ($name:ident, $entity:literal) => {
+        #[doc = concat!("A source-native ", $entity, " identifier.")]
+        #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub fn into_inner(self) -> String {
+                self.0
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_owned())
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl PartialEq<str> for $name {
+            fn eq(&self, other: &str) -> bool {
+                self.as_str() == other
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.as_str() == *other
+            }
+        }
+    };
+}
+
+id_type!(AgencyId, "agency");
+id_type!(RouteId, "route");
+id_type!(ServiceId, "service");
+id_type!(ShapeId, "shape");
+id_type!(StopId, "stop");
+id_type!(TripId, "trip");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ErrorResponse {
@@ -50,13 +128,13 @@ pub struct ReadyResponse {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stop {
-    pub source_id: String,
+    pub source_id: StopId,
     pub code: Option<String>,
     pub name: String,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub location_type: Option<u8>,
-    pub parent_source_id: Option<String>,
+    pub parent_source_id: Option<StopId>,
     pub platform_code: Option<String>,
 }
 
@@ -75,8 +153,8 @@ pub struct NearbyStop {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScheduledDeparture {
-    pub trip_id: String,
-    pub route_id: String,
+    pub trip_id: TripId,
+    pub route_id: RouteId,
     pub route_short_name: Option<String>,
     pub route_long_name: Option<String>,
     pub headsign: Option<String>,
@@ -93,8 +171,8 @@ pub struct ScheduledDeparture {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Route {
-    pub source_id: String,
-    pub agency_source_id: Option<String>,
+    pub source_id: RouteId,
+    pub agency_source_id: Option<AgencyId>,
     pub short_name: Option<String>,
     pub long_name: Option<String>,
     pub route_type: u16,
@@ -104,13 +182,13 @@ pub struct Route {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Trip {
-    pub source_id: String,
-    pub route_id: String,
-    pub service_id: String,
+    pub source_id: TripId,
+    pub route_id: RouteId,
+    pub service_id: ServiceId,
     pub headsign: Option<String>,
     pub short_name: Option<String>,
     pub direction_id: Option<u8>,
-    pub shape_id: Option<String>,
+    pub shape_id: Option<ShapeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,6 +305,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn identifiers_are_transparent_strings_on_the_wire() {
+        let id = StopId::new("stop:ut-centraal");
+        assert_eq!(id.as_str(), "stop:ut-centraal");
+
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, r#""stop:ut-centraal""#);
+        assert_eq!(serde_json::from_str::<StopId>(&json).unwrap(), id);
+        assert_eq!(String::from(id), "stop:ut-centraal");
+    }
+
+    #[test]
     fn query_models_apply_the_server_default_limit() {
         let query: StopSearchQuery = serde_json::from_str(r#"{"query":"centraal"}"#).unwrap();
         assert_eq!(query.limit, 20);
@@ -250,7 +339,7 @@ mod tests {
     #[test]
     fn geographic_models_use_longitude_as_x_and_latitude_as_y() {
         let stop = Stop {
-            source_id: "ut".to_owned(),
+            source_id: "ut".into(),
             code: None,
             name: "Utrecht Centraal".to_owned(),
             latitude: Some(52.0893),

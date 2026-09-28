@@ -113,6 +113,9 @@ and provides both `Serialize` and `Deserialize` implementations without
 depending on Axum, Tokio, or a particular HTTP client.
 Geographic models expose `geo-types` points and shape `LineString` conversion;
 as usual for geospatial Rust types, longitude is `x` and latitude is `y`.
+Agency, stop, route, trip, service, and shape identifiers are distinct
+string-backed newtypes, preventing IDs for different entities from being mixed
+while preserving string values in JSON.
 
 ```toml
 [dependencies]
