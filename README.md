@@ -88,6 +88,8 @@ Endpoints currently available:
 - `GET /v1/stops/in-rect?min_lat=51.8&min_lon=4.8&max_lat=52.3&max_lon=5.8&limit=25000`
 - `GET /v1/stops/{source_id}`
 - `GET /v1/stops/{source_id}/departures?date=2026-09-28&after=25:00:00&limit=20`
+- `GET /v1/stops/{source_id}/routes?limit=20`
+- `GET /v1/stops/{source_id}/trips?date=2026-09-28&limit=20`
 - `GET /v1/routes?query=8&limit=20`
 - `GET /v1/routes/{source_id}`
 - `GET /v1/routes/{source_id}/trips?date=2026-09-28&limit=20`

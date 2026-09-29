@@ -389,6 +389,19 @@ pub struct DeparturesQuery {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StopRoutesQuery {
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StopTripsQuery {
+    pub date: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RouteSearchQuery {
     pub query: String,
     #[serde(default = "default_limit")]

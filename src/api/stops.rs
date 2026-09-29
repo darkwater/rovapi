@@ -5,15 +5,15 @@ use axum::{
     extract::{Path, Query, State, rejection::QueryRejection},
 };
 use rovapi_models::{
-    DeparturesQuery, MAX_RECT_STOPS_LIMIT, NearbyStopsQuery, StopId, StopSearchQuery,
-    StopsInRectQuery,
+    DeparturesQuery, MAX_RECT_STOPS_LIMIT, NearbyStopsQuery, StopId, StopRoutesQuery,
+    StopSearchQuery, StopTripsQuery, StopsInRectQuery,
 };
 
 use crate::{
     AppState,
     error::ApiError,
     gtfs::GtfsTime,
-    storage::{NearbyStop, ScheduledDeparture, StoredStop},
+    storage::{NearbyStop, ScheduledDeparture, StoredRoute, StoredStop, StoredTrip},
 };
 
 use super::{parse_service_date, validate_limit};
@@ -143,4 +143,53 @@ pub(crate) async fn scheduled_departures(
         .await
         .map_err(ApiError::storage)?;
     Ok(Json(departures))
+}
+
+pub(crate) async fn stop_routes(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<StopId>,
+    query: Result<Query<StopRoutesQuery>, QueryRejection>,
+) -> Result<Json<Vec<StoredRoute>>, ApiError> {
+    let Query(query) = query.map_err(ApiError::query)?;
+    validate_limit(query.limit)?;
+    let reader = existing_stop_reader(&state, &source_id).await?;
+    Ok(Json(
+        reader
+            .stop_routes(source_id, query.limit)
+            .await
+            .map_err(ApiError::storage)?,
+    ))
+}
+
+pub(crate) async fn stop_trips(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<StopId>,
+    query: Result<Query<StopTripsQuery>, QueryRejection>,
+) -> Result<Json<Vec<StoredTrip>>, ApiError> {
+    let Query(query) = query.map_err(ApiError::query)?;
+    validate_limit(query.limit)?;
+    let date = parse_service_date(&query.date)?;
+    let reader = existing_stop_reader(&state, &source_id).await?;
+    Ok(Json(
+        reader
+            .stop_trips(source_id, date, query.limit)
+            .await
+            .map_err(ApiError::storage)?,
+    ))
+}
+
+async fn existing_stop_reader(
+    state: &AppState,
+    source_id: &StopId,
+) -> Result<crate::storage::SqliteReader, ApiError> {
+    let reader = state.schedule()?;
+    if reader
+        .stop(source_id.clone())
+        .await
+        .map_err(ApiError::storage)?
+        .is_none()
+    {
+        return Err(ApiError::not_found("stop does not exist"));
+    }
+    Ok(reader)
 }

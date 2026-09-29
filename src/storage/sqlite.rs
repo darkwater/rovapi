@@ -77,6 +77,17 @@ pub trait ScheduleRepository {
         after: GtfsTime,
         limit: usize,
     ) -> Result<Vec<ScheduledDeparture>, StorageError>;
+    fn stop_routes(
+        &self,
+        stop_source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredRoute>, StorageError>;
+    fn stop_trips(
+        &self,
+        stop_source_id: &str,
+        date: GtfsDate,
+        limit: usize,
+    ) -> Result<Vec<StoredTrip>, StorageError>;
     fn route(&self, source_id: &str) -> Result<Option<StoredRoute>, StorageError>;
     fn search_routes(&self, query: &str, limit: usize) -> Result<Vec<StoredRoute>, StorageError>;
     fn route_trips(
@@ -697,6 +708,83 @@ impl ScheduleRepository for SqliteStore {
                     timepoint: row.get(9)?,
                 })
             },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn stop_routes(
+        &self,
+        stop_source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredRoute>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT r.source_id, r.agency_source_id, r.short_name,
+                    r.long_name, r.route_type, r.color, r.text_color
+             FROM stops AS s
+             JOIN stop_times AS st ON st.stop_id = s.id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE s.source_id = ?1
+             ORDER BY r.source_id
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![stop_source_id, bounded_limit(limit)], map_route)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn stop_trips(
+        &self,
+        stop_source_id: &str,
+        date: GtfsDate,
+        limit: usize,
+    ) -> Result<Vec<StoredTrip>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT t.source_id, r.source_id, t.service_source_id,
+                    t.headsign, t.short_name, t.direction_id, t.shape_source_id
+             FROM stops AS s
+             JOIN stop_times AS st ON st.stop_id = s.id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE s.source_id = ?1
+               AND (
+                   EXISTS (
+                       SELECT 1 FROM service_exceptions AS added
+                       WHERE added.service_source_id = t.service_source_id
+                         AND added.date = ?2 AND added.exception_type = 1
+                   )
+                   OR (
+                       EXISTS (
+                           SELECT 1 FROM service_calendars AS calendar
+                           WHERE calendar.service_source_id = t.service_source_id
+                             AND ?2 BETWEEN calendar.start_date AND calendar.end_date
+                             AND CASE ?3
+                                 WHEN 0 THEN calendar.sunday
+                                 WHEN 1 THEN calendar.monday
+                                 WHEN 2 THEN calendar.tuesday
+                                 WHEN 3 THEN calendar.wednesday
+                                 WHEN 4 THEN calendar.thursday
+                                 WHEN 5 THEN calendar.friday
+                                 WHEN 6 THEN calendar.saturday
+                             END = 1
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM service_exceptions AS removed
+                           WHERE removed.service_source_id = t.service_source_id
+                             AND removed.date = ?2 AND removed.exception_type = 2
+                       )
+                   )
+               )
+             ORDER BY t.source_id
+             LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                stop_source_id,
+                date.compact(),
+                date.weekday() as u8,
+                bounded_limit(limit),
+            ],
+            map_trip,
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }

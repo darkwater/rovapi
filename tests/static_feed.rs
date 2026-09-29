@@ -18,7 +18,8 @@ use rovapi::{
     storage::SqliteReader,
 };
 use rovapi_models::{
-    ReadyResponse, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint, Stop,
+    ReadyResponse, Route, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
+    Stop, Trip,
 };
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
@@ -131,6 +132,18 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
     .await;
     assert_eq!(added[0].trip_id, "trip-late");
     assert_eq!(added[0].scheduled_departure, "25:11:00");
+
+    let routes: Vec<Route> = json(app.clone(), "/v1/stops/platform-a/routes").await;
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].source_id, "route-8");
+
+    let removed_trips: Vec<Trip> =
+        json(app.clone(), "/v1/stops/platform-a/trips?date=2026-09-28").await;
+    assert!(removed_trips.is_empty());
+    let added_trips: Vec<Trip> =
+        json(app.clone(), "/v1/stops/platform-a/trips?date=2026-10-03").await;
+    assert_eq!(added_trips.len(), 1);
+    assert_eq!(added_trips[0].source_id, "trip-late");
 
     let stops: Vec<ScheduledStopCall> = json(app.clone(), "/v1/trips/trip-late/stops").await;
     assert_eq!(stops[1].stop.platform_code.as_deref(), Some("B"));

@@ -13,7 +13,10 @@ use tracing::Level;
 use crate::{
     api::routes::{get_route, route_trips, search_routes},
     api::schedule::get_schedule_metadata,
-    api::stops::{get_stop, nearby_stops, scheduled_departures, search_stops, stops_in_rect},
+    api::stops::{
+        get_stop, nearby_stops, scheduled_departures, search_stops, stop_routes, stop_trips,
+        stops_in_rect,
+    },
     api::trips::{get_trip, trip_shape, trip_stops},
     error::{method_not_allowed, not_found},
     health::{live, ready},
@@ -80,6 +83,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/stops/nearby", get(nearby_stops))
         .route("/v1/stops/in-rect", get(stops_in_rect))
         .route("/v1/stops/:id/departures", get(scheduled_departures))
+        .route("/v1/stops/:id/routes", get(stop_routes))
+        .route("/v1/stops/:id/trips", get(stop_trips))
         .route("/v1/stops/:id", get(get_stop))
         .route("/v1/routes", get(search_routes))
         .route("/v1/routes/:id/trips", get(route_trips))

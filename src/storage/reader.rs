@@ -70,6 +70,17 @@ enum Command {
         limit: usize,
         response: oneshot::Sender<Result<Vec<ScheduledDeparture>, StorageError>>,
     },
+    StopRoutes {
+        stop_source_id: String,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<StoredRoute>, StorageError>>,
+    },
+    StopTrips {
+        stop_source_id: String,
+        date: GtfsDate,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<StoredTrip>, StorageError>>,
+    },
     Route {
         source_id: String,
         response: oneshot::Sender<Result<Option<StoredRoute>, StorageError>>,
@@ -110,6 +121,8 @@ impl Command {
             Self::NearbyStops { response, .. } => response.is_closed(),
             Self::StopsInRect { response, .. } => response.is_closed(),
             Self::ScheduledDepartures { response, .. } => response.is_closed(),
+            Self::StopRoutes { response, .. } => response.is_closed(),
+            Self::StopTrips { response, .. } => response.is_closed(),
             Self::Route { response, .. } => response.is_closed(),
             Self::SearchRoutes { response, .. } => response.is_closed(),
             Self::RouteTrips { response, .. } => response.is_closed(),
@@ -135,6 +148,12 @@ impl Command {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::ScheduledDepartures { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::StopRoutes { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::StopTrips { response, .. } => {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::Route { response, .. } => {
@@ -279,6 +298,22 @@ impl SqliteReader {
                                     after,
                                     limit,
                                 ));
+                            }
+                            Command::StopRoutes {
+                                stop_source_id,
+                                limit,
+                                response,
+                            } => {
+                                let _ = response.send(store.stop_routes(&stop_source_id, limit));
+                            }
+                            Command::StopTrips {
+                                stop_source_id,
+                                date,
+                                limit,
+                                response,
+                            } => {
+                                let _ =
+                                    response.send(store.stop_trips(&stop_source_id, date, limit));
                             }
                             Command::Route {
                                 source_id,
@@ -442,6 +477,36 @@ impl SqliteReader {
             stop_source_id,
             date,
             after,
+            limit,
+            response,
+        })
+        .await
+    }
+
+    pub async fn stop_routes(
+        &self,
+        stop_source_id: impl Into<String>,
+        limit: usize,
+    ) -> Result<Vec<StoredRoute>, StorageError> {
+        let stop_source_id = stop_source_id.into();
+        self.execute(move |response| Command::StopRoutes {
+            stop_source_id,
+            limit,
+            response,
+        })
+        .await
+    }
+
+    pub async fn stop_trips(
+        &self,
+        stop_source_id: impl Into<String>,
+        date: GtfsDate,
+        limit: usize,
+    ) -> Result<Vec<StoredTrip>, StorageError> {
+        let stop_source_id = stop_source_id.into();
+        self.execute(move |response| Command::StopTrips {
+            stop_source_id,
+            date,
             limit,
             response,
         })
