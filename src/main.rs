@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 feed_info = summary.feed_info,
                 agencies = summary.agencies,
                 stops = summary.stops,
+                stop_groups = summary.stop_groups,
                 routes = summary.routes,
                 calendars = summary.calendars,
                 calendar_dates = summary.calendar_dates,
@@ -69,6 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 info!(
                     version = active.version.as_str(),
                     stops = summary.stops,
+                    stop_groups = summary.stop_groups,
                     routes = summary.routes,
                     trips = summary.trips,
                     stop_times = summary.stop_times,
@@ -96,6 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     info!(
                         version = active.version.as_str(),
                         stops = summary.stops,
+                        stop_groups = summary.stop_groups,
                         routes = summary.routes,
                         trips = summary.trips,
                         stop_times = summary.stop_times,

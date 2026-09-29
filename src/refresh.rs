@@ -68,9 +68,14 @@ pub async fn refresh_once(data: Arc<DataDirectory>, state: &AppState) -> Result<
             cached
         }
         DownloadOutcome::Downloaded(downloaded) => {
-            let version = ScheduleVersion::parse(format!("nl-{}", downloaded.sha256))?;
+            let version = ScheduleVersion::parse(format!("nl-v6-{}", downloaded.sha256))?;
             let snapshot = data.install_snapshot(&candidate, &version)?;
-            data.save_download_state(STATIC_FEED_URL, downloaded.validators, &downloaded.sha256)?;
+            data.save_download_state(
+                STATIC_FEED_URL,
+                downloaded.validators,
+                &downloaded.sha256,
+                &version,
+            )?;
             info!(
                 version = version.as_str(),
                 bytes = downloaded.bytes,
@@ -105,6 +110,7 @@ pub async fn refresh_once(data: Arc<DataDirectory>, state: &AppState) -> Result<
         info!(
             version = version.as_str(),
             stops = summary.stops,
+            stop_groups = summary.stop_groups,
             routes = summary.routes,
             trips = summary.trips,
             stop_times = summary.stop_times,

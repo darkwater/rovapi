@@ -4,6 +4,7 @@ use crate::{error::ApiError, gtfs::GtfsDate};
 
 pub(crate) mod routes;
 pub(crate) mod schedule;
+pub(crate) mod stop_groups;
 pub(crate) mod stops;
 pub(crate) mod trips;
 

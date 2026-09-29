@@ -28,6 +28,8 @@ struct DownloadState {
     validators: DownloadValidators,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     content_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_version: Option<ScheduleVersion>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -153,9 +155,11 @@ impl DataDirectory {
         if state.url != url {
             return Ok(DownloadValidators::default());
         }
-        if let Some(digest) = &state.content_sha256 {
-            let version = ScheduleVersion::parse(format!("nl-{digest}"))?;
-            if !self.snapshot_path(&version).is_file() && !self.database_path(&version).is_file() {
+        if state.content_sha256.is_some() {
+            let Some(version) = &state.schedule_version else {
+                return Ok(DownloadValidators::default());
+            };
+            if !self.snapshot_path(version).is_file() && !self.database_path(version).is_file() {
                 // A validator is only useful while the representation it refers
                 // to remains available locally. Otherwise force a full response.
                 return Ok(DownloadValidators::default());
@@ -172,7 +176,7 @@ impl DataDirectory {
         let Some(state) = self.read_download_state()? else {
             return Ok(DownloadValidators::default());
         };
-        if state.url != url || state.content_sha256.is_none() {
+        if state.url != url || state.content_sha256.is_none() || state.schedule_version.is_none() {
             return Ok(DownloadValidators::default());
         }
         self.download_validators(url)
@@ -188,10 +192,9 @@ impl DataDirectory {
         if state.url != url {
             return Ok(None);
         }
-        let Some(digest) = state.content_sha256 else {
+        let Some(version) = state.schedule_version else {
             return Ok(None);
         };
-        let version = ScheduleVersion::parse(format!("nl-{digest}"))?;
         let snapshot = self.snapshot_path(&version);
         Ok(
             (snapshot.is_file() || self.database_path(&version).is_file())
@@ -226,6 +229,7 @@ impl DataDirectory {
             url: url.to_owned(),
             validators,
             content_sha256: None,
+            schedule_version: None,
         })
     }
 
@@ -234,11 +238,13 @@ impl DataDirectory {
         url: &str,
         validators: DownloadValidators,
         content_sha256: &str,
+        schedule_version: &ScheduleVersion,
     ) -> Result<(), ScheduleError> {
         self.write_download_state(DownloadState {
             url: url.to_owned(),
             validators,
             content_sha256: Some(content_sha256.to_owned()),
+            schedule_version: Some(schedule_version.clone()),
         })
     }
 

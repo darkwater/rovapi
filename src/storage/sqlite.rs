@@ -7,10 +7,10 @@ use std::{
 };
 
 use rovapi_models::{
-    AgencyId, FeedInfo as StoredFeedInfo, LocationType, NearbyStop, Route as StoredRoute, RouteId,
-    ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ServiceId,
-    ShapeId, ShapePoint as StoredShapePoint, Stop as StoredStop, StopId, Trip as StoredTrip,
-    TripId,
+    AgencyId, FeedInfo as StoredFeedInfo, GeoBounds, LocationType, NearbyStop,
+    Route as StoredRoute, RouteId, ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture,
+    ScheduledStopCall, ServiceId, ShapeId, ShapePoint as StoredShapePoint, Stop as StoredStop,
+    StopGroup as StoredStopGroup, StopGroupId, StopId, Trip as StoredTrip, TripId,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Statement, Transaction, params, types::Type,
@@ -23,7 +23,8 @@ const CALENDAR_SCHEMA: &str = include_str!("../../migrations/0002_calendar.sql")
 const SHAPE_SCHEMA: &str = include_str!("../../migrations/0003_shapes.sql");
 const TRANSFER_SCHEMA: &str = include_str!("../../migrations/0004_transfers.sql");
 const FEED_INFO_SCHEMA: &str = include_str!("../../migrations/0005_feed_info.sql");
-const SCHEMA_VERSION: u32 = 5;
+const STOP_GROUP_SCHEMA: &str = include_str!("../../migrations/0006_stop_groups.sql");
+const SCHEMA_VERSION: u32 = 6;
 const EARTH_RADIUS_METRES: f64 = 6_371_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +44,7 @@ pub struct ImportSummary {
     pub feed_info: u64,
     pub agencies: u64,
     pub stops: u64,
+    pub stop_groups: u64,
     pub routes: u64,
     pub calendars: u64,
     pub calendar_dates: u64,
@@ -70,6 +72,14 @@ pub trait ScheduleRepository {
         max_longitude: f64,
         limit: usize,
     ) -> Result<Vec<StoredStop>, StorageError>;
+    fn stop_groups_in_rect(
+        &self,
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+    ) -> Result<Vec<StoredStopGroup>, StorageError>;
     fn scheduled_departures(
         &self,
         stop_source_id: &str,
@@ -142,6 +152,7 @@ impl SqliteStore {
         store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.connection.execute_batch(TRANSFER_SCHEMA)?;
         store.connection.execute_batch(FEED_INFO_SCHEMA)?;
+        store.connection.execute_batch(STOP_GROUP_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -156,6 +167,7 @@ impl SqliteStore {
         store.connection.execute_batch(SHAPE_SCHEMA)?;
         store.connection.execute_batch(TRANSFER_SCHEMA)?;
         store.connection.execute_batch(FEED_INFO_SCHEMA)?;
+        store.connection.execute_batch(STOP_GROUP_SCHEMA)?;
         store.ensure_schema_version()?;
         Ok(store)
     }
@@ -224,6 +236,7 @@ impl SqliteStore {
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis(),
             stops = summary.stops,
+            stop_groups = summary.stop_groups,
             routes = summary.routes,
             trips = summary.trips,
             stop_times = summary.stop_times,
@@ -275,6 +288,7 @@ impl SqliteStore {
         drop(agency_statement);
 
         let mut stop_ids = HashMap::new();
+        let mut grouping_locations = Vec::new();
         let mut stop_statement = transaction.prepare(
             "INSERT INTO stops (
                 source_id, code, name, latitude, longitude, location_type,
@@ -291,6 +305,15 @@ impl SqliteStore {
         )?;
         let stops = archive.visit_stops(|stop| {
             let source_id = stop.stop_id.clone();
+            let grouping_location = crate::stop_groups::Location {
+                database_id: 0,
+                source_id: stop.stop_id.clone(),
+                name: stop.stop_name.clone(),
+                latitude: stop.stop_lat,
+                longitude: stop.stop_lon,
+                location_type: stop.location_type.unwrap_or(0),
+                parent_source_id: empty_to_none(&stop.parent_station).map(str::to_owned),
+            };
             let id = insert_gtfs_stop_prepared(
                 &transaction,
                 &mut stop_statement,
@@ -299,11 +322,65 @@ impl SqliteStore {
                 stop,
             )?;
             stop_ids.insert(source_id, id);
+            grouping_locations.push(crate::stop_groups::Location {
+                database_id: id,
+                ..grouping_location
+            });
             Ok::<_, StorageError>(())
         })?;
         drop(stop_statement);
         drop(stop_search_statement);
         drop(stop_spatial_statement);
+
+        let groups = crate::stop_groups::derive(&grouping_locations);
+        let stop_groups = groups.len() as u64;
+        let mut group_statement = transaction.prepare(
+            "INSERT INTO stop_groups(
+                source_id, name, latitude, longitude, min_latitude,
+                min_longitude, max_latitude, max_longitude, member_count
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?;
+        let mut member_statement = transaction
+            .prepare("INSERT INTO stop_group_members(group_id, stop_id) VALUES (?1, ?2)")?;
+        let mut group_spatial_statement = transaction.prepare(
+            "INSERT INTO stop_group_spatial(
+                group_id, min_latitude, max_latitude, min_longitude, max_longitude
+             ) VALUES (?1, ?2, ?2, ?3, ?3)",
+        )?;
+        for group in groups {
+            let (min_latitude, min_longitude, max_latitude, max_longitude) = group
+                .bounds
+                .map(|bounds| {
+                    (
+                        Some(bounds.0),
+                        Some(bounds.1),
+                        Some(bounds.2),
+                        Some(bounds.3),
+                    )
+                })
+                .unwrap_or((None, None, None, None));
+            group_statement.execute(params![
+                group.source_id,
+                group.name,
+                group.latitude,
+                group.longitude,
+                min_latitude,
+                min_longitude,
+                max_latitude,
+                max_longitude,
+                group.member_ids.len() as i64,
+            ])?;
+            let group_id = transaction.last_insert_rowid();
+            for member_id in group.member_ids {
+                member_statement.execute(params![group_id, member_id])?;
+            }
+            if let (Some(latitude), Some(longitude)) = (group.latitude, group.longitude) {
+                group_spatial_statement.execute(params![group_id, latitude, longitude])?;
+            }
+        }
+        drop(group_statement);
+        drop(member_statement);
+        drop(group_spatial_statement);
 
         let mut route_ids = HashMap::new();
         let mut route_statement = transaction.prepare(
@@ -460,6 +537,7 @@ impl SqliteStore {
             feed_info,
             agencies,
             stops,
+            stop_groups,
             routes,
             calendars,
             calendar_dates,
@@ -627,6 +705,43 @@ impl ScheduleRepository for SqliteStore {
                 bounded_rect_limit(limit),
             ],
             map_stop,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn stop_groups_in_rect(
+        &self,
+        min_latitude: f64,
+        min_longitude: f64,
+        max_latitude: f64,
+        max_longitude: f64,
+        limit: usize,
+    ) -> Result<Vec<StoredStopGroup>, StorageError> {
+        validate_coordinates(Some(min_latitude), Some(min_longitude))?;
+        validate_coordinates(Some(max_latitude), Some(max_longitude))?;
+        if min_latitude > max_latitude || min_longitude > max_longitude {
+            return Err(StorageError::InvalidRectangle);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT g.source_id, g.name, g.latitude, g.longitude,
+                    g.min_latitude, g.min_longitude, g.max_latitude,
+                    g.max_longitude, g.member_count
+             FROM stop_group_spatial AS spatial
+             JOIN stop_groups AS g ON g.id = spatial.group_id
+             WHERE spatial.max_latitude >= ?1 AND spatial.min_latitude <= ?2
+               AND spatial.max_longitude >= ?3 AND spatial.min_longitude <= ?4
+             ORDER BY g.source_id
+             LIMIT ?5",
+        )?;
+        let rows = statement.query_map(
+            params![
+                min_latitude,
+                max_latitude,
+                min_longitude,
+                max_longitude,
+                bounded_rect_limit(limit),
+            ],
+            map_stop_group,
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -1109,6 +1224,31 @@ fn map_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRoute> {
     })
 }
 
+fn map_stop_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredStopGroup> {
+    let min_latitude = row.get(4)?;
+    let min_longitude = row.get(5)?;
+    let max_latitude = row.get(6)?;
+    let max_longitude = row.get(7)?;
+    let bounds = match (min_latitude, min_longitude, max_latitude, max_longitude) {
+        (Some(min_lat), Some(min_lon), Some(max_lat), Some(max_lon)) => Some(GeoBounds {
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        }),
+        (None, None, None, None) => None,
+        _ => return Err(rusqlite::Error::InvalidQuery),
+    };
+    Ok(StoredStopGroup {
+        id: StopGroupId::from(row.get::<_, String>(0)?),
+        name: row.get(1)?,
+        latitude: row.get(2)?,
+        longitude: row.get(3)?,
+        bounds,
+        member_count: row.get::<_, i64>(8)? as usize,
+    })
+}
+
 fn map_trip(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTrip> {
     Ok(StoredTrip {
         source_id: TripId::from(row.get::<_, String>(0)?),
@@ -1353,7 +1493,7 @@ mod tests {
     #[test]
     fn bundled_sqlite_supports_schema_fts_and_rtree() {
         let mut store = SqliteStore::create_in_memory().unwrap();
-        assert_eq!(store.schema_version().unwrap(), 5);
+        assert_eq!(store.schema_version().unwrap(), 6);
         store
             .insert_stop(stop("ut-centraal", "Utrecht Centraal", 52.0893, 5.1103))
             .unwrap();
@@ -1428,6 +1568,7 @@ mod tests {
                 feed_info: 1,
                 agencies: 1,
                 stops: 1,
+                stop_groups: 1,
                 routes: 1,
                 calendars: 1,
                 calendar_dates: 0,
@@ -1628,7 +1769,7 @@ mod tests {
             SqliteStore::open_read_only(database.path()),
             Err(StorageError::UnsupportedSchema {
                 actual: 999,
-                expected: 5
+                expected: 6
             })
         ));
     }

@@ -19,7 +19,7 @@ use rovapi::{
 };
 use rovapi_models::{
     ReadyResponse, Route, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
-    Stop, Trip,
+    Stop, StopGroup, Trip,
 };
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
@@ -89,6 +89,7 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
         .import_and_activate(&version, fixture_zip(&fixture), ImportLimits::default())
         .unwrap();
     assert_eq!(summary.stops, 3);
+    assert_eq!(summary.stop_groups, 1);
     assert_eq!(summary.stop_times, 2);
     assert_eq!(summary.shape_points, 3);
     assert_eq!(summary.transfers, 1);
@@ -117,6 +118,17 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
     assert_eq!(rectangle_stops.len(), 3);
     assert_eq!(rectangle_stops[0].source_id, "platform-a");
     assert_eq!(rectangle_stops[2].source_id, "station-ut");
+
+    let groups: Vec<StopGroup> = json(
+        app.clone(),
+        "/v1/stop-groups/in-rect?min_lat=52.08&min_lon=5.10&max_lat=52.10&max_lon=5.12",
+    )
+    .await;
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].id, "group:station-ut");
+    assert_eq!(groups[0].member_count, 3);
+    assert_eq!(groups[0].latitude, Some(52.0893));
+    assert_eq!(groups[0].bounds.as_ref().unwrap().min_lat, 52.0892);
 
     let removed: Vec<ScheduledDeparture> = json(
         app.clone(),

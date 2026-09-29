@@ -86,6 +86,7 @@ Endpoints currently available:
 - `GET /v1/stops?query=utrecht&limit=20`
 - `GET /v1/stops/nearby?lat=52.09&lon=5.12&radius=1000&limit=20`
 - `GET /v1/stops/in-rect?min_lat=51.8&min_lon=4.8&max_lat=52.3&max_lon=5.8&limit=25000`
+- `GET /v1/stop-groups/in-rect?min_lat=51.8&min_lon=4.8&max_lat=52.3&max_lon=5.8&limit=25000`
 - `GET /v1/stops/{source_id}`
 - `GET /v1/stops/{source_id}/departures?date=2026-09-28&after=25:00:00&limit=20`
 - `GET /v1/stops/{source_id}/routes?limit=20`
@@ -112,6 +113,14 @@ Rectangle stop queries use the spatial index directly, return stops in stable
 ID order, default to 10,000 results, and accept at most 25,000 results. They are
 intended for map viewports and province-scale synchronization; nearby queries
 remain distance-sorted and capped at 100.
+
+Stop-group rectangle queries return the derived, non-overlapping set of map
+markers. Every raw GTFS location belongs to exactly one group, including
+singletons. Valid `parent_station` hierarchies are preserved, then nearby
+locations with the same normalized name are combined to reconcile duplicate
+and partially grouped operator data. Each group includes its representative
+point, member count, and the bounds of all underlying locations so a client can
+begin zooming before loading detailed members.
 
 The schedule endpoint reports the locally activated version and import time. If
 the feed supplies `feed_info.txt`, it also reports the publisher, source version,

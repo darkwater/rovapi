@@ -33,7 +33,7 @@ const fn default_rect_stops_limit() -> usize {
 
 macro_rules! id_type {
     ($name:ident, $entity:literal) => {
-        #[doc = concat!("A source-native ", $entity, " identifier.")]
+        #[doc = concat!("An API ", $entity, " identifier.")]
         #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(String);
@@ -107,6 +107,7 @@ id_type!(RouteId, "route");
 id_type!(ServiceId, "service");
 id_type!(ShapeId, "shape");
 id_type!(StopId, "stop");
+id_type!(StopGroupId, "derived stop group");
 id_type!(TripId, "trip");
 
 /// GTFS location hierarchy type, encoded as its standard numeric value in JSON.
@@ -210,6 +211,36 @@ pub struct Stop {
     pub location_type: LocationType,
     pub parent_source_id: Option<StopId>,
     pub platform_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GeoBounds {
+    pub min_lat: f64,
+    pub min_lon: f64,
+    pub max_lat: f64,
+    pub max_lon: f64,
+}
+
+impl GeoBounds {
+    pub fn rect(&self) -> Rect<f64> {
+        Rect::new((self.min_lon, self.min_lat), (self.max_lon, self.max_lat))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StopGroup {
+    pub id: StopGroupId,
+    pub name: String,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub bounds: Option<GeoBounds>,
+    pub member_count: usize,
+}
+
+impl StopGroup {
+    pub fn point(&self) -> Option<Point<f64>> {
+        Some(Point::new(self.longitude?, self.latitude?))
+    }
 }
 
 impl Stop {

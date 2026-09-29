@@ -7,6 +7,7 @@ pub mod gtfs;
 pub mod health;
 pub mod refresh;
 pub mod schedule;
+mod stop_groups;
 pub mod storage;
 
 pub use app::{AppState, router};
