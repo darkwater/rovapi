@@ -7,10 +7,10 @@ use rovapi::{
     refresh::run_static_refresh,
     router,
     schedule::{DataDirectory, ScheduleVersion},
-    storage::SqliteReader,
+    storage::{SqliteReader, StorageError},
 };
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -162,7 +162,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(active) => {
             let database = data_directory.database_path(&active.version);
             info!(version = active.version.as_str(), path = %database.display(), "loading schedule");
-            AppState::with_schedule(SqliteReader::open(database).await?)
+            match SqliteReader::open(database).await {
+                Ok(reader) => AppState::with_schedule(reader),
+                Err(StorageError::UnsupportedSchema { actual, expected }) => {
+                    warn!(
+                        version = active.version.as_str(),
+                        actual_schema = actual,
+                        expected_schema = expected,
+                        "active schedule uses an unsupported schema; rebuilding in background"
+                    );
+                    AppState::new()
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         None => {
             info!(path = %config.data_directory.display(), "no active schedule found");
