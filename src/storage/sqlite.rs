@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fmt,
     io::{Read, Seek},
     path::Path,
@@ -7,10 +7,11 @@ use std::{
 };
 
 use rovapi_models::{
-    AgencyId, FeedInfo as StoredFeedInfo, GeoBounds, LocationType, NearbyStop,
-    Route as StoredRoute, RouteId, ScheduleMetadata as StoredScheduleMetadata, ScheduledDeparture,
-    ScheduledStopCall, ServiceId, ShapeId, ShapePoint as StoredShapePoint, Stop as StoredStop,
-    StopGroup as StoredStopGroup, StopGroupId, StopId, Trip as StoredTrip, TripId,
+    Agency as StoredAgency, AgencyId, FeedInfo as StoredFeedInfo, GeoBounds, LocationType,
+    NearbyStop, Route as StoredRoute, RouteId, ScheduleMetadata as StoredScheduleMetadata,
+    ScheduledDeparture, ScheduledStopCall, ServiceId, ShapeId, ShapePoint as StoredShapePoint,
+    Stop as StoredStop, StopGroup as StoredStopGroup, StopGroupDetails as StoredStopGroupDetails,
+    StopGroupId, StopGroupMember, StopId, Trip as StoredTrip, TripId,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Statement, Transaction, params, types::Type,
@@ -80,6 +81,10 @@ pub trait ScheduleRepository {
         max_longitude: f64,
         limit: usize,
     ) -> Result<Vec<StoredStopGroup>, StorageError>;
+    fn stop_group_details(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<StoredStopGroupDetails>, StorageError>;
     fn scheduled_departures(
         &self,
         stop_source_id: &str,
@@ -746,6 +751,121 @@ impl ScheduleRepository for SqliteStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    fn stop_group_details(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<StoredStopGroupDetails>, StorageError> {
+        let Some(group) = self
+            .connection
+            .query_row(
+                "SELECT source_id, name, latitude, longitude, min_latitude,
+                        min_longitude, max_latitude, max_longitude, member_count
+                 FROM stop_groups WHERE source_id = ?1",
+                [source_id],
+                map_stop_group,
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+
+        let mut member_statement = self.connection.prepare(
+            "SELECT s.source_id, s.code, s.name, s.latitude, s.longitude,
+                    s.location_type, s.parent_source_id, s.platform_code
+             FROM stop_groups AS g
+             JOIN stop_group_members AS gm ON gm.group_id = g.id
+             JOIN stops AS s ON s.id = gm.stop_id
+             WHERE g.source_id = ?1
+             ORDER BY s.source_id",
+        )?;
+        let member_rows = member_statement.query_map([source_id], map_stop)?;
+        let mut members: Vec<_> = member_rows
+            .map(|location| {
+                Ok(StopGroupMember {
+                    location: location?,
+                    route_ids: Vec::new(),
+                    agency_ids: Vec::new(),
+                })
+            })
+            .collect::<Result<_, rusqlite::Error>>()?;
+        drop(member_statement);
+
+        let member_indexes: HashMap<_, _> = members
+            .iter()
+            .enumerate()
+            .map(|(index, member)| (member.location.source_id.clone(), index))
+            .collect();
+        let mut associations: Vec<(BTreeSet<RouteId>, BTreeSet<AgencyId>)> =
+            vec![(BTreeSet::new(), BTreeSet::new()); members.len()];
+        let mut association_statement = self.connection.prepare(
+            "SELECT DISTINCT s.source_id, r.source_id, r.agency_source_id
+             FROM stop_groups AS g
+             JOIN stop_group_members AS gm ON gm.group_id = g.id
+             JOIN stops AS s ON s.id = gm.stop_id
+             JOIN stop_times AS st ON st.stop_id = s.id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE g.source_id = ?1
+             ORDER BY s.source_id, r.source_id",
+        )?;
+        let association_rows = association_statement.query_map([source_id], |row| {
+            Ok((
+                StopId::from(row.get::<_, String>(0)?),
+                RouteId::from(row.get::<_, String>(1)?),
+                row.get::<_, Option<String>>(2)?.map(AgencyId::from),
+            ))
+        })?;
+        for association in association_rows {
+            let (stop_id, route_id, agency_id) = association?;
+            let index = member_indexes[&stop_id];
+            associations[index].0.insert(route_id);
+            if let Some(agency_id) = agency_id {
+                associations[index].1.insert(agency_id);
+            }
+        }
+        for (member, (route_ids, agency_ids)) in members.iter_mut().zip(associations) {
+            member.route_ids = route_ids.into_iter().collect();
+            member.agency_ids = agency_ids.into_iter().collect();
+        }
+
+        let mut route_statement = self.connection.prepare(
+            "SELECT DISTINCT r.source_id, r.agency_source_id, r.short_name,
+                    r.long_name, r.route_type, r.color, r.text_color
+             FROM stop_groups AS g
+             JOIN stop_group_members AS gm ON gm.group_id = g.id
+             JOIN stop_times AS st ON st.stop_id = gm.stop_id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             WHERE g.source_id = ?1
+             ORDER BY r.source_id",
+        )?;
+        let routes = route_statement
+            .query_map([source_id], map_route)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut agency_statement = self.connection.prepare(
+            "SELECT DISTINCT a.source_id, a.name, a.url, a.timezone
+             FROM stop_groups AS g
+             JOIN stop_group_members AS gm ON gm.group_id = g.id
+             JOIN stop_times AS st ON st.stop_id = gm.stop_id
+             JOIN trips AS t ON t.id = st.trip_id
+             JOIN routes AS r ON r.id = t.route_id
+             JOIN agencies AS a ON a.source_id = r.agency_source_id
+             WHERE g.source_id = ?1
+             ORDER BY a.source_id",
+        )?;
+        let agencies = agency_statement
+            .query_map([source_id], map_agency)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(StoredStopGroupDetails {
+            group,
+            members,
+            routes,
+            agencies,
+        }))
+    }
+
     fn scheduled_departures(
         &self,
         stop_source_id: &str,
@@ -1221,6 +1341,15 @@ fn map_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRoute> {
         route_type: row.get(4)?,
         color: row.get(5)?,
         text_color: row.get(6)?,
+    })
+}
+
+fn map_agency(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAgency> {
+    Ok(StoredAgency {
+        source_id: AgencyId::from(row.get::<_, String>(0)?),
+        name: row.get(1)?,
+        url: row.get(2)?,
+        timezone: row.get(3)?,
     })
 }
 

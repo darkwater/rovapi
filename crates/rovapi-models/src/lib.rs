@@ -243,6 +243,29 @@ impl StopGroup {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Agency {
+    pub source_id: AgencyId,
+    pub name: String,
+    pub url: String,
+    pub timezone: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StopGroupMember {
+    pub location: Stop,
+    pub route_ids: Vec<RouteId>,
+    pub agency_ids: Vec<AgencyId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StopGroupDetails {
+    pub group: StopGroup,
+    pub members: Vec<StopGroupMember>,
+    pub routes: Vec<Route>,
+    pub agencies: Vec<Agency>,
+}
+
 impl Stop {
     /// Returns the WGS84 stop position with longitude as `x` and latitude as `y`.
     pub fn point(&self) -> Option<Point<f64>> {

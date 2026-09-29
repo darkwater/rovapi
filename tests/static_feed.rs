@@ -19,7 +19,7 @@ use rovapi::{
 };
 use rovapi_models::{
     ReadyResponse, Route, ScheduleMetadata, ScheduledDeparture, ScheduledStopCall, ShapePoint,
-    Stop, StopGroup, Trip,
+    Stop, StopGroup, StopGroupDetails, Trip,
 };
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
@@ -129,6 +129,21 @@ async fn imports_activates_and_serves_the_representative_static_feed() {
     assert_eq!(groups[0].member_count, 3);
     assert_eq!(groups[0].latitude, Some(52.0893));
     assert_eq!(groups[0].bounds.as_ref().unwrap().min_lat, 52.0892);
+
+    let details: StopGroupDetails = json(app.clone(), "/v1/stop-groups/group:station-ut").await;
+    assert_eq!(details.group.member_count, 3);
+    assert_eq!(details.members.len(), 3);
+    let platform = details
+        .members
+        .iter()
+        .find(|member| member.location.source_id == "platform-a")
+        .unwrap();
+    assert_eq!(platform.route_ids, ["route-8"]);
+    assert_eq!(platform.agency_ids, ["example"]);
+    assert_eq!(details.routes.len(), 1);
+    assert_eq!(details.routes[0].source_id, "route-8");
+    assert_eq!(details.agencies.len(), 1);
+    assert_eq!(details.agencies[0].name, "Example Transit");
 
     let removed: Vec<ScheduledDeparture> = json(
         app.clone(),

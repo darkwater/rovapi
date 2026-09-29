@@ -14,7 +14,7 @@ use crate::gtfs::{GtfsDate, GtfsTime};
 use super::{
     NearbyStop, ScheduleRepository, ScheduledDeparture, ScheduledStopCall, SqliteStore,
     StorageError, StoredRoute, StoredScheduleMetadata, StoredShapePoint, StoredStop,
-    StoredStopGroup, StoredTrip,
+    StoredStopGroup, StoredStopGroupDetails, StoredTrip,
 };
 
 const DEFAULT_READER_COUNT: usize = 4;
@@ -71,6 +71,10 @@ enum Command {
         max_longitude: f64,
         limit: usize,
         response: oneshot::Sender<Result<Vec<StoredStopGroup>, StorageError>>,
+    },
+    StopGroupDetails {
+        source_id: String,
+        response: oneshot::Sender<Result<Option<StoredStopGroupDetails>, StorageError>>,
     },
     ScheduledDepartures {
         stop_source_id: String,
@@ -130,6 +134,7 @@ impl Command {
             Self::NearbyStops { response, .. } => response.is_closed(),
             Self::StopsInRect { response, .. } => response.is_closed(),
             Self::StopGroupsInRect { response, .. } => response.is_closed(),
+            Self::StopGroupDetails { response, .. } => response.is_closed(),
             Self::ScheduledDepartures { response, .. } => response.is_closed(),
             Self::StopRoutes { response, .. } => response.is_closed(),
             Self::StopTrips { response, .. } => response.is_closed(),
@@ -158,6 +163,9 @@ impl Command {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::StopGroupsInRect { response, .. } => {
+                let _ = response.send(Err(StorageError::QueryTimedOut));
+            }
+            Self::StopGroupDetails { response, .. } => {
                 let _ = response.send(Err(StorageError::QueryTimedOut));
             }
             Self::ScheduledDepartures { response, .. } => {
@@ -313,6 +321,12 @@ impl SqliteReader {
                                     max_longitude,
                                     limit,
                                 ));
+                            }
+                            Command::StopGroupDetails {
+                                source_id,
+                                response,
+                            } => {
+                                let _ = response.send(store.stop_group_details(&source_id));
                             }
                             Command::ScheduledDepartures {
                                 stop_source_id,
@@ -508,6 +522,18 @@ impl SqliteReader {
             max_latitude,
             max_longitude,
             limit,
+            response,
+        })
+        .await
+    }
+
+    pub async fn stop_group_details(
+        &self,
+        source_id: impl Into<String>,
+    ) -> Result<Option<StoredStopGroupDetails>, StorageError> {
+        let source_id = source_id.into();
+        self.execute(move |response| Command::StopGroupDetails {
+            source_id,
             response,
         })
         .await

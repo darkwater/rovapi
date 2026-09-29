@@ -2,11 +2,26 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Query, State, rejection::QueryRejection},
+    extract::{Path, Query, State, rejection::QueryRejection},
 };
-use rovapi_models::{MAX_RECT_STOPS_LIMIT, StopGroup, StopsInRectQuery};
+use rovapi_models::{
+    MAX_RECT_STOPS_LIMIT, StopGroup, StopGroupDetails, StopGroupId, StopsInRectQuery,
+};
 
 use crate::{AppState, error::ApiError};
+
+pub(crate) async fn get_stop_group(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<StopGroupId>,
+) -> Result<Json<StopGroupDetails>, ApiError> {
+    state
+        .schedule()?
+        .stop_group_details(source_id)
+        .await
+        .map_err(ApiError::storage)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("stop group does not exist"))
+}
 
 pub(crate) async fn stop_groups_in_rect(
     State(state): State<Arc<AppState>>,
