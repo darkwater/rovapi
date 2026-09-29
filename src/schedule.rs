@@ -30,6 +30,8 @@ struct DownloadState {
     content_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     schedule_version: Option<ScheduleVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    import_format: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -172,11 +174,16 @@ impl DataDirectory {
     pub fn verified_download_validators(
         &self,
         url: &str,
+        import_format: &str,
     ) -> Result<DownloadValidators, ScheduleError> {
         let Some(state) = self.read_download_state()? else {
             return Ok(DownloadValidators::default());
         };
-        if state.url != url || state.content_sha256.is_none() || state.schedule_version.is_none() {
+        if state.url != url
+            || state.content_sha256.is_none()
+            || state.schedule_version.is_none()
+            || state.import_format.as_deref() != Some(import_format)
+        {
             return Ok(DownloadValidators::default());
         }
         self.download_validators(url)
@@ -185,11 +192,12 @@ impl DataDirectory {
     pub fn cached_download(
         &self,
         url: &str,
+        import_format: &str,
     ) -> Result<Option<(ScheduleVersion, PathBuf)>, ScheduleError> {
         let Some(state) = self.read_download_state()? else {
             return Ok(None);
         };
-        if state.url != url {
+        if state.url != url || state.import_format.as_deref() != Some(import_format) {
             return Ok(None);
         }
         let Some(version) = state.schedule_version else {
@@ -230,6 +238,7 @@ impl DataDirectory {
             validators,
             content_sha256: None,
             schedule_version: None,
+            import_format: None,
         })
     }
 
@@ -239,12 +248,14 @@ impl DataDirectory {
         validators: DownloadValidators,
         content_sha256: &str,
         schedule_version: &ScheduleVersion,
+        import_format: &str,
     ) -> Result<(), ScheduleError> {
         self.write_download_state(DownloadState {
             url: url.to_owned(),
             validators,
             content_sha256: Some(content_sha256.to_owned()),
             schedule_version: Some(schedule_version.clone()),
+            import_format: Some(import_format.to_owned()),
         })
     }
 

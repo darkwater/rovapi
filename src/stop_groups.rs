@@ -130,7 +130,7 @@ fn build_group(mut members: Vec<&Location>) -> Group {
     let position_members: Vec<_> = members
         .iter()
         .copied()
-        .filter(|location| location.location_type == 1 && location.latitude.is_some())
+        .filter(|location| location.location_type == 1 && usable_position(location).is_some())
         .collect();
     let position = if position_members.is_empty() {
         average_position(members.iter().copied())
@@ -139,7 +139,7 @@ fn build_group(mut members: Vec<&Location>) -> Group {
     };
     let coordinates: Vec<_> = members
         .iter()
-        .filter_map(|location| Some((location.latitude?, location.longitude?)))
+        .filter_map(|location| usable_position(location))
         .collect();
     let bounds = (!coordinates.is_empty()).then(|| {
         coordinates.iter().fold(
@@ -168,9 +168,7 @@ fn build_group(mut members: Vec<&Location>) -> Group {
 }
 
 fn average_position<'a>(locations: impl Iterator<Item = &'a Location>) -> Option<(f64, f64)> {
-    let positions: Vec<_> = locations
-        .filter_map(|location| Some((location.latitude?, location.longitude?)))
-        .collect();
+    let positions: Vec<_> = locations.filter_map(usable_position).collect();
     (!positions.is_empty()).then(|| {
         let count = positions.len() as f64;
         let (latitude, longitude) = positions
@@ -178,6 +176,11 @@ fn average_position<'a>(locations: impl Iterator<Item = &'a Location>) -> Option
             .fold((0.0, 0.0), |sum, point| (sum.0 + point.0, sum.1 + point.1));
         (latitude / count, longitude / count)
     })
+}
+
+fn usable_position(location: &Location) -> Option<(f64, f64)> {
+    let position = (location.latitude?, location.longitude?);
+    (position != (0.0, 0.0)).then_some(position)
 }
 
 fn normalize_name(name: &str) -> String {
@@ -273,5 +276,25 @@ mod tests {
         ]);
         assert_eq!(groups.len(), 3);
         assert!(groups.iter().all(|group| group.member_ids.len() == 1));
+    }
+
+    #[test]
+    fn ignores_zero_coordinate_sentinels_on_parent_stations() {
+        let groups = derive(&[
+            location(1, "station", "International", 0.0, 0.0, 1, None),
+            location(
+                2,
+                "platform",
+                "International",
+                50.0,
+                8.0,
+                0,
+                Some("station"),
+            ),
+        ]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].latitude, Some(50.0));
+        assert_eq!(groups[0].longitude, Some(8.0));
+        assert_eq!(groups[0].bounds, Some((50.0, 8.0, 50.0, 8.0)));
     }
 }

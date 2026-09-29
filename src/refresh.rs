@@ -18,6 +18,7 @@ use crate::{
 
 pub const STATIC_FEED_URL: &str = "https://gtfs.ovapi.nl/nl/gtfs-nl.zip";
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
+const IMPORT_FORMAT: &str = "v6g2";
 const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const REFRESH_SECOND_UTC: u64 = 4 * 60 * 60 + 15 * 60;
 
@@ -50,7 +51,7 @@ pub async fn refresh_once(data: Arc<DataDirectory>, state: &AppState) -> Result<
         std::fs::remove_file(&candidate).map_err(ScheduleError::from)?;
     }
 
-    let validators = data.verified_download_validators(STATIC_FEED_URL)?;
+    let validators = data.verified_download_validators(STATIC_FEED_URL, IMPORT_FORMAT)?;
     info!(url = STATIC_FEED_URL, "checking static GTFS feed");
     let downloader = FeedDownloader::new(MAX_SNAPSHOT_BYTES)?;
     let (version, snapshot) = match downloader
@@ -59,7 +60,7 @@ pub async fn refresh_once(data: Arc<DataDirectory>, state: &AppState) -> Result<
     {
         DownloadOutcome::NotModified => {
             info!(url = STATIC_FEED_URL, "static GTFS feed has not changed");
-            let Some(cached) = data.cached_download(STATIC_FEED_URL)? else {
+            let Some(cached) = data.cached_download(STATIC_FEED_URL, IMPORT_FORMAT)? else {
                 // This should only be possible for legacy validator state. The
                 // next check will be unconditional because no digest is bound
                 // to those validators.
@@ -68,13 +69,15 @@ pub async fn refresh_once(data: Arc<DataDirectory>, state: &AppState) -> Result<
             cached
         }
         DownloadOutcome::Downloaded(downloaded) => {
-            let version = ScheduleVersion::parse(format!("nl-v6-{}", downloaded.sha256))?;
+            let version =
+                ScheduleVersion::parse(format!("nl-{IMPORT_FORMAT}-{}", downloaded.sha256))?;
             let snapshot = data.install_snapshot(&candidate, &version)?;
             data.save_download_state(
                 STATIC_FEED_URL,
                 downloaded.validators,
                 &downloaded.sha256,
                 &version,
+                IMPORT_FORMAT,
             )?;
             info!(
                 version = version.as_str(),
