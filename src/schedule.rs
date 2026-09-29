@@ -26,6 +26,8 @@ const MAX_DOWNLOAD_STATE_BYTES: u64 = 16 * 1024;
 struct DownloadState {
     url: String,
     validators: DownloadValidators,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -123,12 +125,86 @@ impl DataDirectory {
             .join(format!("{}.gtfs.zip", version.as_str()))
     }
 
+    pub fn download_candidate_path(&self) -> PathBuf {
+        self.root
+            .join("snapshots")
+            .join(".static-feed.candidate.zip")
+    }
+
+    pub fn install_snapshot(
+        &self,
+        candidate: &Path,
+        version: &ScheduleVersion,
+    ) -> Result<PathBuf, ScheduleError> {
+        let destination = self.snapshot_path(version);
+        if destination.is_file() {
+            fs::remove_file(candidate)?;
+            return Ok(destination);
+        }
+        fs::rename(candidate, &destination)?;
+        sync_directory(&self.root.join("snapshots"))?;
+        Ok(destination)
+    }
+
     pub fn download_validators(&self, url: &str) -> Result<DownloadValidators, ScheduleError> {
+        let Some(state) = self.read_download_state()? else {
+            return Ok(DownloadValidators::default());
+        };
+        if state.url != url {
+            return Ok(DownloadValidators::default());
+        }
+        if let Some(digest) = &state.content_sha256 {
+            let version = ScheduleVersion::parse(format!("nl-{digest}"))?;
+            if !self.snapshot_path(&version).is_file() && !self.database_path(&version).is_file() {
+                // A validator is only useful while the representation it refers
+                // to remains available locally. Otherwise force a full response.
+                return Ok(DownloadValidators::default());
+            }
+        }
+        Ok(state.validators)
+    }
+
+    /// Returns validators only when they are tied to locally usable content.
+    pub fn verified_download_validators(
+        &self,
+        url: &str,
+    ) -> Result<DownloadValidators, ScheduleError> {
+        let Some(state) = self.read_download_state()? else {
+            return Ok(DownloadValidators::default());
+        };
+        if state.url != url || state.content_sha256.is_none() {
+            return Ok(DownloadValidators::default());
+        }
+        self.download_validators(url)
+    }
+
+    pub fn cached_download(
+        &self,
+        url: &str,
+    ) -> Result<Option<(ScheduleVersion, PathBuf)>, ScheduleError> {
+        let Some(state) = self.read_download_state()? else {
+            return Ok(None);
+        };
+        if state.url != url {
+            return Ok(None);
+        }
+        let Some(digest) = state.content_sha256 else {
+            return Ok(None);
+        };
+        let version = ScheduleVersion::parse(format!("nl-{digest}"))?;
+        let snapshot = self.snapshot_path(&version);
+        Ok(
+            (snapshot.is_file() || self.database_path(&version).is_file())
+                .then_some((version, snapshot)),
+        )
+    }
+
+    fn read_download_state(&self) -> Result<Option<DownloadState>, ScheduleError> {
         let path = self.root.join("state").join(DOWNLOAD_STATE_FILE);
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(DownloadValidators::default());
+                return Ok(None);
             }
             Err(error) => return Err(error.into()),
         };
@@ -138,11 +214,7 @@ impl DataDirectory {
             ));
         }
         let state: DownloadState = serde_json::from_reader(BufReader::new(file))?;
-        if state.url == url {
-            Ok(state.validators)
-        } else {
-            Ok(DownloadValidators::default())
-        }
+        Ok(Some(state))
     }
 
     pub fn save_download_validators(
@@ -150,6 +222,27 @@ impl DataDirectory {
         url: &str,
         validators: DownloadValidators,
     ) -> Result<(), ScheduleError> {
+        self.write_download_state(DownloadState {
+            url: url.to_owned(),
+            validators,
+            content_sha256: None,
+        })
+    }
+
+    pub fn save_download_state(
+        &self,
+        url: &str,
+        validators: DownloadValidators,
+        content_sha256: &str,
+    ) -> Result<(), ScheduleError> {
+        self.write_download_state(DownloadState {
+            url: url.to_owned(),
+            validators,
+            content_sha256: Some(content_sha256.to_owned()),
+        })
+    }
+
+    fn write_download_state(&self, state: DownloadState) -> Result<(), ScheduleError> {
         let state_directory = self.root.join("state");
         let temporary_path = state_directory.join(DOWNLOAD_STATE_TEMP_FILE);
         let final_path = state_directory.join(DOWNLOAD_STATE_FILE);
@@ -159,13 +252,7 @@ impl DataDirectory {
             .truncate(true)
             .open(&temporary_path)?;
         let mut writer = BufWriter::new(temporary);
-        serde_json::to_writer(
-            &mut writer,
-            &DownloadState {
-                url: url.to_owned(),
-                validators,
-            },
-        )?;
+        serde_json::to_writer(&mut writer, &state)?;
         writer.write_all(b"\n")?;
         writer.flush()?;
         writer.get_ref().sync_all()?;
@@ -185,6 +272,18 @@ impl DataDirectory {
         reader: R,
         limits: ImportLimits,
     ) -> Result<(ActiveSchedule, ImportSummary), ScheduleError> {
+        let summary = self.import_and_install(version, reader, limits)?;
+        let active = self.activate(version)?;
+        Ok((active, summary))
+    }
+
+    /// Imports a GTFS ZIP and installs it without changing the active schedule.
+    pub fn import_and_install<R: Read + Seek>(
+        &self,
+        version: &ScheduleVersion,
+        reader: R,
+        limits: ImportLimits,
+    ) -> Result<ImportSummary, ScheduleError> {
         if self.database_path(version).exists() {
             return Err(ScheduleError::InvalidActiveFile(
                 "schedule version already exists",
@@ -205,9 +304,9 @@ impl DataDirectory {
             .to_string();
         store.set_metadata("imported_at_unix", &imported_at_unix)?;
         store.prepare_for_activation()?;
-        let active = self.install_and_activate(version)?;
+        self.install(version)?;
         staging_guard.disarm();
-        Ok((active, summary))
+        Ok(summary)
     }
 
     /// Moves a finalized staging database into place and activates it.
@@ -215,6 +314,12 @@ impl DataDirectory {
         &self,
         version: &ScheduleVersion,
     ) -> Result<ActiveSchedule, ScheduleError> {
+        self.install(version)?;
+        self.activate(version)
+    }
+
+    /// Moves a finalized staging database into its immutable installed path.
+    pub fn install(&self, version: &ScheduleVersion) -> Result<(), ScheduleError> {
         let staging = self.staging_path(version);
         if !staging.is_file() {
             return Err(ScheduleError::MissingDatabase(staging));
@@ -227,7 +332,7 @@ impl DataDirectory {
         }
         fs::rename(&staging, &database)?;
         sync_directory(&self.schedules)?;
-        self.activate(version)
+        Ok(())
     }
 
     pub fn activate(&self, version: &ScheduleVersion) -> Result<ActiveSchedule, ScheduleError> {

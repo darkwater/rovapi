@@ -5,6 +5,7 @@ pub mod download;
 pub mod error;
 pub mod gtfs;
 pub mod health;
+pub mod refresh;
 pub mod schedule;
 pub mod storage;
 

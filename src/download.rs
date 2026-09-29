@@ -9,6 +9,7 @@ use reqwest::{
     header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{fs, io::AsyncWriteExt};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,8 @@ pub struct DownloadValidators {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DownloadedFeed {
     pub bytes: u64,
+    /// SHA-256 of the decoded response body (the GTFS ZIP bytes).
+    pub sha256: String,
     pub validators: DownloadValidators,
 }
 
@@ -48,7 +51,11 @@ impl FeedDownloader {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(15 * 60))
-            .user_agent(concat!("rovapi/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!(
+                "rovapi/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/darkwater/rovapi)"
+            ))
             .build()?;
         Ok(Self { client, max_bytes })
     }
@@ -113,8 +120,10 @@ impl FeedDownloader {
         };
         let mut file = fs::File::create(temporary).await?;
         let mut bytes = 0_u64;
+        let mut digest = Sha256::new();
         while let Some(chunk) = response.chunk().await? {
             write_limited(&mut file, &mut bytes, self.max_bytes, &chunk).await?;
+            digest.update(&chunk);
         }
         file.flush().await?;
         file.sync_all().await?;
@@ -122,6 +131,7 @@ impl FeedDownloader {
 
         Ok(DownloadOutcome::Downloaded(DownloadedFeed {
             bytes,
+            sha256: format!("{:x}", digest.finalize()),
             validators,
         }))
     }

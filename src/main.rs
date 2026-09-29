@@ -1,9 +1,10 @@
-use std::{env, error::Error, fs::File, io, path::PathBuf};
+use std::{env, error::Error, fs::File, io, path::PathBuf, sync::Arc};
 
 use rovapi::{
     AppState, Config,
     download::{DownloadOutcome, FeedDownloader},
     gtfs::ImportLimits,
+    refresh::run_static_refresh,
     router,
     schedule::{DataDirectory, ScheduleVersion},
     storage::SqliteReader,
@@ -153,7 +154,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let config = Config::from_env()?;
-    let data_directory = DataDirectory::open(&config.data_directory)?;
+    let data_directory = Arc::new(DataDirectory::open(&config.data_directory)?);
     let state = match data_directory.active()? {
         Some(active) => {
             let database = data_directory.database_path(&active.version);
@@ -168,9 +169,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(config.bind_address).await?;
     info!(address = %config.bind_address, "listening");
 
+    let refresh_task = tokio::spawn(run_static_refresh(
+        Arc::clone(&data_directory),
+        state.clone(),
+    ));
+
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    refresh_task.abort();
 
     Ok(())
 }
