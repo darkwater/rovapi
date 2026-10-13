@@ -11,8 +11,10 @@ exact distance filtering.
 ROVAPI is a separate project from OVapi.nl; that service can still be used as
 an upstream source of Dutch GTFS data.
 
-The project is in its initial scaffolding phase. See [PLAN.md](PLAN.md) for the
-data-source research, architecture, API outline, and implementation milestones.
+The static GTFS importer and schedule API are implemented; realtime ingestion
+and live views are planned. See [PLAN.md](PLAN.md) for the broader architecture
+and milestones, [DATABASE_MODELS.md](DATABASE_MODELS.md) for the stored schedule
+models, and [EXPLORER_PLAN.md](EXPLORER_PLAN.md) for the native explorer.
 
 ## Run locally
 
@@ -129,6 +131,25 @@ language, and advertised date range.
 
 Readiness returns HTTP 503 until a validated schedule database has been loaded;
 liveness continues to report whether the process itself is running.
+
+## Native schedule explorer
+
+The workspace includes `rovapi-explorer`, a read-only egui application for
+inspecting an installed schedule database. Start it with:
+
+```sh
+cargo run -p rovapi-explorer
+```
+
+By default it opens the active schedule named in `ROVAPI_DATA_DIR/active.json`
+(`./data/active.json` when the variable is unset). Use
+`--database ./data/schedules/<version>.sqlite` to inspect another version.
+Search and page through routes, inspect route fields and distinct shapes on a
+Walkers map with OpenStreetMap tiles, then select a trip to see its exact shape
+and ordered stop calls. The map keeps its transit overlays when tiles are
+unavailable. An existing database file
+is required; the explorer does not import feeds or acquire the service's
+data-directory writer lock.
 
 ## Rust API models
 

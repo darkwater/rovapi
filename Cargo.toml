@@ -1,12 +1,12 @@
 [workspace]
-members = [".", "crates/rovapi-models"]
+members = [".", "crates/rovapi-models", "crates/rovapi-explorer"]
+default-members = [".", "crates/rovapi-models"]
 resolver = "3"
 
 [package]
 name = "rovapi"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
 
 [dependencies]
 axum = "0.7.9"
